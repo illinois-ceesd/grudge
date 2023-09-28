@@ -6,6 +6,7 @@ Container class and auxiliary functionality
 -------------------------------------------
 
 .. autoclass:: TracePair
+.. autoclass:: CommTag
 
 .. currentmodule:: grudge.op
 
@@ -74,7 +75,7 @@ from dataclasses import dataclass
 
 from numbers import Number
 
-from pytools import memoize_on_first_arg
+from pytools import memoize_on_first_arg, memoize_method
 
 from grudge.discretization import DiscretizationCollection, PartID
 from grudge.projection import project
@@ -322,8 +323,24 @@ def interior_trace_pair(dcoll: DiscretizationCollection, vec) -> TracePair:
     return local_interior_trace_pair(dcoll, vec)
 
 
+class CommTag:
+    """A communication tag with a hash value that is stable across
+    runs, even without setting ``PYTHONHASHSEED``."""
+
+    @memoize_method
+    def __hash__(self) -> int:
+        return hash(tuple(str(type(self)).encode("ascii")))
+
+    def __eq__(self, other: object) -> bool:
+        return type(self) is type(other)
+
+    def update_persistent_hash(self, key_hash, key_builder):
+        key_builder.rec(key_hash, (self.__class__.__module__,
+                                   self.__class__.__qualname__))
+
+
 def interior_trace_pairs(dcoll: DiscretizationCollection, vec, *,
-        comm_tag: Hashable = None, tag: Hashable = None,
+        comm_tag: Optional[Hashable] = None, tag: Hashable = None,
         volume_dd: Optional[DOFDesc] = None) -> List[TracePair]:
     r"""Return a :class:`list` of :class:`TracePair` objects
     defined on the interior faces of *dcoll* and any faces connected to a
@@ -338,7 +355,7 @@ def interior_trace_pairs(dcoll: DiscretizationCollection, vec, *,
     :arg comm_tag: a hashable object used to match sent and received data
         across ranks. Communication will only match if both endpoints specify
         objects that compare equal. A generalization of MPI communication
-        tags to arbitary, potentially composite objects.
+        tags to arbitrary, potentially composite objects.
     :returns: a :class:`list` of :class:`TracePair` objects.
     """
 
@@ -801,7 +818,7 @@ def cross_rank_trace_pairs(
     :arg comm_tag: a hashable object used to match sent and received data
         across ranks. Communication will only match if both endpoints specify
         objects that compare equal. A generalization of MPI communication
-        tags to arbitary, potentially composite objects.
+        tags to arbitrary, potentially composite objects.
 
     :returns: a :class:`list` of :class:`TracePair` objects.
     """
