@@ -600,6 +600,20 @@ class _RankBoundaryCommunicationEager:
         self.recv_comm_tag = _generate_num_comm_tag(recv_sym_comm_tag)
         del comm_tag
 
+        # Here, we initialize both send and receive operations through
+        # mpi4py `Request` (MPI_Request) instances for comm.Isend (MPI_Isend)
+        # and comm.Irecv (MPI_Irecv) respectively. These initiate non-blocking
+        # point-to-point communication requests and require explicit management
+        # via the use of wait (MPI_Wait, MPI_Waitall, MPI_Waitany, MPI_Waitsome),
+        # test (MPI_Test, MPI_Testall, MPI_Testany, MPI_Testsome), and cancel
+        # (MPI_Cancel). The rank-local data `self.local_bdry_data_np` will have its
+        # associated memory buffer sent across connected ranks and must not be
+        # modified at the Python level during this process. Completion of the
+        # requests is handled in :meth:`finish`.
+        #
+        # For more details on the mpi4py semantics, see:
+        # https://mpi4py.readthedocs.io/en/stable/overview.html#nonblocking-communications
+        #
         # NOTE: mpi4py currently (2021-11-03) holds a reference to the send
         # memory buffer for (i.e. `self.local_bdry_data_np`) until the send
         # requests is complete, however it is not clear that this is documented
