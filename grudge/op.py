@@ -89,7 +89,7 @@ from modepy.tools import (
 
 from grudge.discretization import DiscretizationCollection
 from grudge.dof_desc import as_dofdesc
-from grudge.array_context import OutputIsTensorProductDOFArrayOrdered
+from grudge.array_context import OutputIsTensorProductDOFArrayOrdered, TensorProductDOFAxis
 
 from pytools import keyed_memoize_in
 from pytools.obj_array import make_obj_array
@@ -202,8 +202,11 @@ def _single_axis_derivative_kernel(
 
     def compute_tensor_product_derivative(actx, grp, get_diff_mat, vec, ijm,
                                           xyz_axis, metric_in_matvec):
-
-        vec = fold(grp.space, vec)
+        vec = tag_axes(
+            actx,
+            { i: TensorProductDOFAxis() for i in range(1, grp.dim+1) },
+            fold(grp.space, vec)
+        )
 
         if metric_in_matvec:
             stiff_1d, mass_1d = get_diff_mat(actx, grp, grp)
@@ -213,8 +216,7 @@ def _single_axis_derivative_kernel(
             for ax in apply_mass_axes:
                 vec_mass_applied = single_axis_operator_application(
                     actx, grp.dim, mass_1d, ax, vec,
-                    tags=(FirstAxisIsElementsTag(),
-                          OutputIsTensorProductDOFArrayOrdered(),),
+                    tags=(FirstAxisIsElementsTag(),),
                     arg_names=("mass_1d", "vec")
                 )
 
@@ -222,8 +224,7 @@ def _single_axis_derivative_kernel(
                 grp.space,
                 single_axis_operator_application(
                     actx, grp.dim, stiff_1d, xyz_axis, vec_mass_applied,
-                    tags=(FirstAxisIsElementsTag(),
-                          OutputIsTensorProductDOFArrayOrdered(),),
+                    tags=(FirstAxisIsElementsTag(),),
                     arg_names=("stiff_1d", "vec_with_mass_applied"))
             )
 
@@ -242,8 +243,7 @@ def _single_axis_derivative_kernel(
                 grp.space,
                 single_axis_operator_application(
                     actx, grp.dim, diff_mat, xyz_axis, vec,
-                    tags=(FirstAxisIsElementsTag(),
-                          OutputIsTensorProductDOFArrayOrdered(),),
+                    tags=(FirstAxisIsElementsTag(),),
                     arg_names=("diff_mat", "vec"))
             )
 
@@ -304,21 +304,12 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
 
     def compute_tensor_product_grad(actx, grp, diff_mat, vec, ijm,
                                     metric_in_matvec):
-        # TODO: add note about inverse mass simplification, point to
-        # op.inverse_mass (assuming this is where the explanation will live)
-        """
-        """
-
-        if grp.dim > 3 and metric_in_matvec:
-            warn('Efficient tensor product weak '
-                'differentiation operators only '
-                'implemented for dimension 2 and 3. '
-                'Defaulting to inefficient version.')
-            return compute_simplicial_grad(actx, grp, grp, diff_mat, vec, ijm,
-                                           metric_in_matvec)
-
         # reshape vector to expose tensor product structure
-        vec = fold(grp.space, vec)
+        vec = tag_axes(
+            actx,
+            { i: TensorProductDOFAxis() for i in range(1, grp.dim+1) },
+            fold(grp.space, vec)
+        )
 
         if metric_in_matvec:
             stiff_1d, mass_1d = get_diff_mat(actx, grp, grp)
@@ -332,8 +323,7 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
                 for ax in apply_mass_axes:
                     grad[xyz_axis] = single_axis_operator_application(
                         actx, grp.dim, mass_1d, ax, grad[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),
-                              OutputIsTensorProductDOFArrayOrdered(),),
+                        tags=(FirstAxisIsElementsTag(),),
                         arg_names=("mass_1d", f"vec_{xyz_axis}")
                 )
 
@@ -342,8 +332,7 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
                     grp.space,
                     single_axis_operator_application(
                         actx, grp.dim, stiff_1d, xyz_axis, grad[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),
-                              OutputIsTensorProductDOFArrayOrdered(),),
+                        tags=(FirstAxisIsElementsTag(),),
                         arg_names=("stiff_1d", f"vec_{xyz_axis}"))
                 )
 
@@ -357,8 +346,7 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
                     grp.space,
                     single_axis_operator_application(
                         actx, grp.dim, diff_mat, xyz_axis, grad[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),
-                              OutputIsTensorProductDOFArrayOrdered(),),
+                        tags=(FirstAxisIsElementsTag(),),
                         arg_names=("diff_mat", f"vec_{xyz_axis}")
                     )
                 )
@@ -421,21 +409,12 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
     # {{{ tensor product div
 
     def compute_tensor_product_div(actx, grp, diff_mat, vec, ijm):
-        """
-        Exploits tensor product structure to reduce complexity. See
-        `_gradient_kernel.compute_tensor_product_grad` for more details.
-        """
-
-        if grp.dim > 3 and metric_in_matvec:
-            warn('Efficient tensor product weak '
-                 'differentiation operators only '
-                 'implemented for dimension 2 and 3. '
-                 'Defaulting to inefficient version.')
-            return compute_simplicial_div(actx, grp, grp, diff_mat, vec, ijm,
-                                          metric_in_matvec)
-
         vec = make_obj_array([
-            fold(grp.space, vec[func_axis])
+            tag_axes(
+                actx,
+                { i : TensorProductDOFAxis() for i in range(1, grp.dim+1) },
+                fold(grp.space, vec[func_axis])
+            )
             for func_axis in range(vec.shape[0])
         ])
 
@@ -452,15 +431,13 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
                     for ax in apply_mass_axes:
                         ref[xyz_axis] = single_axis_operator_application(
                             actx, grp.dim, mass_1d, ax, ref[xyz_axis],
-                            tags=(FirstAxisIsElementsTag(),
-                                  OutputIsTensorProductDOFArrayOrdered(),),
+                            tags=(FirstAxisIsElementsTag(),),
                             arg_names=("mass_1d", f"vec_{func_axis}_{xyz_axis}")
                         )
 
                     ref[xyz_axis] = single_axis_operator_application(
                         actx, grp.dim, stiff_1d, xyz_axis, ref[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),
-                              OutputIsTensorProductDOFArrayOrdered(),),
+                        tags=(FirstAxisIsElementsTag(),),
                         arg_names=("stiff_1d", f"vec_{func_axis}_{xyz_axis}")
                     )
 
@@ -477,8 +454,7 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
 
                     ref[xyz_axis] = single_axis_operator_application(
                         actx, grp.dim, diff_mat, xyz_axis, ref[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),
-                              OutputIsTensorProductDOFArrayOrdered(),),
+                        tags=(FirstAxisIsElementsTag(),),
                         arg_names=("diff_mat", f"vec_{func_axis}_{xyz_axis}")
                     )
 
@@ -1488,9 +1464,13 @@ def single_axis_operator_application(actx, dim, operator, axis, data,
 
     spec = operator_spec + ',' + data_spec + '->' + out_spec
 
-    return actx.einsum(spec, operator, data,
-                       arg_names=arg_names,
-                       tagged=tags)
+    return tag_axes(
+        actx,
+        { i : TensorProductDOFAxis() for i in range(1, dim+1) },
+        actx.einsum(spec, operator, data,
+                           arg_names=arg_names,
+                           tagged=tags)
+    )
 
 # }}}
 
