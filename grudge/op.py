@@ -336,7 +336,8 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
                     grp.space,
                     single_axis_operator_application(
                         actx, grp.dim, stiff_1d, xyz_axis, grad[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),),
+                        tags=(FirstAxisIsElementsTag(),
+                              OutputIsTensorProductDOFArrayOrdered(),),
                         arg_names=("stiff_1d", f"vec_{xyz_axis}"))
                 )
 

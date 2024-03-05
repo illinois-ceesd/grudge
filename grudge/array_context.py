@@ -107,6 +107,10 @@ if TYPE_CHECKING:
     import pyopencl.tools
     from mpi4py import MPI
 
+# }}}
+
+
+# {{{ pyopencl
 
 class PyOpenCLArrayContext(_PyOpenCLArrayContextBase):
     """Inherits from :class:`meshmode.array_context.PyOpenCLArrayContext`. Extends it
@@ -125,29 +129,29 @@ class PyOpenCLArrayContext(_PyOpenCLArrayContextBase):
         super().__init__(queue, allocator,
                          wait_event_queue_length, force_device_scalars)
 
-    # def transform_loopy_program(self, t_unit):
-    #     knl = t_unit.default_entrypoint
-    #
-    #     # {{{ process tensor product specific metadata
-    #
-    #     if knl.tags_of_type(OutputIsTensorProductDOFArrayOrdered):
-    #         new_args = []
-    #         for arg in knl.args:
-    #             if arg.is_output:
-    #                 arg = arg.copy(dim_tags=(
-    #                     f"N{len(arg.shape)-1},"
-    #                     + ",".join(f"N{i}"
-    #                                for i in range(len(arg.shape)-1))
-    #                     ))
-    #
-    #             new_args.append(arg)
-    #
-    #         knl = knl.copy(args=new_args)
-    #         t_unit = t_unit.with_kernel(knl)
-    #
-    #     # }}}
-    #
-    #     return super().transform_loopy_program(t_unit)
+    def transform_loopy_program(self, t_unit):
+        knl = t_unit.default_entrypoint
+
+        # {{{ process tensor product specific metadata
+
+        if knl.tags_of_type(OutputIsTensorProductDOFArrayOrdered):
+            new_args = []
+            for arg in knl.args:
+                if arg.is_output:
+                    arg = arg.copy(dim_tags=(
+                        f"N{len(arg.shape)-1},"
+                        + ",".join(f"N{i}"
+                                   for i in range(len(arg.shape)-1))
+                        ))
+
+                new_args.append(arg)
+
+            knl = knl.copy(args=new_args)
+            t_unit = t_unit.with_kernel(knl)
+
+        # }}}
+
+        return super().transform_loopy_program(t_unit)
 
 # }}}
 
