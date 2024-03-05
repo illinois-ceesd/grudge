@@ -216,7 +216,8 @@ def _single_axis_derivative_kernel(
             for ax in apply_mass_axes:
                 vec_mass_applied = single_axis_operator_application(
                     actx, grp.dim, mass_1d, ax, vec,
-                    tags=(FirstAxisIsElementsTag(),),
+                    tags=(FirstAxisIsElementsTag(),
+                          OutputIsTensorProductDOFArrayOrdered(),),
                     arg_names=("mass_1d", "vec")
                 )
 
@@ -224,7 +225,8 @@ def _single_axis_derivative_kernel(
                 grp.space,
                 single_axis_operator_application(
                     actx, grp.dim, stiff_1d, xyz_axis, vec_mass_applied,
-                    tags=(FirstAxisIsElementsTag(),),
+                    tags=(FirstAxisIsElementsTag(),
+                          OutputIsTensorProductDOFArrayOrdered(),),
                     arg_names=("stiff_1d", "vec_with_mass_applied"))
             )
 
@@ -243,7 +245,8 @@ def _single_axis_derivative_kernel(
                 grp.space,
                 single_axis_operator_application(
                     actx, grp.dim, diff_mat, xyz_axis, vec,
-                    tags=(FirstAxisIsElementsTag(),),
+                    tags=(FirstAxisIsElementsTag(),
+                          OutputIsTensorProductDOFArrayOrdered(),),
                     arg_names=("diff_mat", "vec"))
             )
 
@@ -323,7 +326,8 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
                 for ax in apply_mass_axes:
                     grad[xyz_axis] = single_axis_operator_application(
                         actx, grp.dim, mass_1d, ax, grad[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),),
+                        tags=(FirstAxisIsElementsTag(),
+                              OutputIsTensorProductDOFArrayOrdered(),),
                         arg_names=("mass_1d", f"vec_{xyz_axis}")
                 )
 
@@ -346,7 +350,8 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
                     grp.space,
                     single_axis_operator_application(
                         actx, grp.dim, diff_mat, xyz_axis, grad[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),),
+                        tags=(FirstAxisIsElementsTag(),
+                              OutputIsTensorProductDOFArrayOrdered(),),
                         arg_names=("diff_mat", f"vec_{xyz_axis}")
                     )
                 )
@@ -431,13 +436,15 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
                     for ax in apply_mass_axes:
                         ref[xyz_axis] = single_axis_operator_application(
                             actx, grp.dim, mass_1d, ax, ref[xyz_axis],
-                            tags=(FirstAxisIsElementsTag(),),
+                            tags=(FirstAxisIsElementsTag(),
+                                  OutputIsTensorProductDOFArrayOrdered(),),
                             arg_names=("mass_1d", f"vec_{func_axis}_{xyz_axis}")
                         )
 
                     ref[xyz_axis] = single_axis_operator_application(
                         actx, grp.dim, stiff_1d, xyz_axis, ref[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),),
+                        tags=(FirstAxisIsElementsTag(),
+                              OutputIsTensorProductDOFArrayOrdered(),),
                         arg_names=("stiff_1d", f"vec_{func_axis}_{xyz_axis}")
                     )
 
@@ -454,7 +461,8 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
 
                     ref[xyz_axis] = single_axis_operator_application(
                         actx, grp.dim, diff_mat, xyz_axis, ref[xyz_axis],
-                        tags=(FirstAxisIsElementsTag(),),
+                        tags=(FirstAxisIsElementsTag(),
+                              OutputIsTensorProductDOFArrayOrdered(),),
                         arg_names=("diff_mat", f"vec_{func_axis}_{xyz_axis}")
                     )
 
@@ -476,6 +484,7 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
         )
 
         return div
+
     # }}}
 
 

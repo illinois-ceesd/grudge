@@ -662,6 +662,8 @@ except ImportError:
 
 # {{{ tensor product-specific machinery
 
+# FIXME: This is not permanent, but is necessary for eager evaluation in the
+# current state of `actx.einsum`
 class OutputIsTensorProductDOFArrayOrdered(Tag):
     """Signify that the strides will not be of order "C" or "F".
 
@@ -675,7 +677,8 @@ class OutputIsTensorProductDOFArrayOrdered(Tag):
 
 class TensorProductDOFAxis(DiscretizationDOFAxisTag):
     """
-    TODO: Add doc
+    Signify that an axis contains DOF data and belongs to a tensor product
+    discretization.
     """
     pass
 
