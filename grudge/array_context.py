@@ -679,7 +679,7 @@ class OutputIsTensorProductDOFArrayOrdered(Tag):
     pass
 
 
-class TensorProductDOFAxis(DiscretizationDOFAxisTag):
+class TensorProductDOFAxisTag(DiscretizationDOFAxisTag):
     """
     Signify that an axis contains DOF data and belongs to a tensor product
     discretization.
