@@ -1,5 +1,4 @@
 """
-
 .. autoclass:: DiscretizationTag
 
 .. currentmodule:: grudge
@@ -38,6 +37,8 @@ THE SOFTWARE.
 
 from typing import (
     Sequence, Mapping, Optional, Union, List, Tuple, TYPE_CHECKING, Any)
+from typing import Mapping, Optional, Union, TYPE_CHECKING, Any
+from meshmode.discretization.poly_element import ModalGroupFactory
 
 from pytools import memoize_method, single_valued
 
@@ -181,11 +182,8 @@ def _normalize_discr_tag_to_group_factory(
     assert discr_tag_to_group_factory is not None
 
     # Modal discr should always come from the base discretization
-    if DISCR_TAG_MODAL not in discr_tag_to_group_factory:
-        discr_tag_to_group_factory[DISCR_TAG_MODAL] = \
-            _generate_modal_group_factory(
-                discr_tag_to_group_factory[DISCR_TAG_BASE]
-            )
+    if DISCR_TAG_MODAL not in discr_tag_to_group_factory and order is not None:
+        discr_tag_to_group_factory[DISCR_TAG_MODAL] = ModalGroupFactory(order)
 
     return discr_tag_to_group_factory
 
@@ -347,6 +345,71 @@ class DiscretizationCollection:
             return self.mpi_communicator.Get_rank() \
                     == self.get_management_rank_index()
 
+    # {{{ distributed
+
+    def _set_up_distributed_communication(
+            self, vtag, mpi_communicator, array_context):
+        from_dd = DOFDesc(VolumeDomainTag(vtag), DISCR_TAG_BASE)
+
+        boundary_connections = {}
+
+        from meshmode.distributed import get_connected_partitions
+        connected_parts = get_connected_partitions(self._volume_discrs[vtag].mesh)
+
+        if connected_parts:
+            if mpi_communicator is None:
+                raise RuntimeError("must supply an MPI communicator when using a "
+                    "distributed mesh")
+
+            grp_factory = \
+                self.group_factory_for_discretization_tag(DISCR_TAG_BASE)
+
+            local_boundary_connections = {}
+            for i_remote_part in connected_parts:
+                local_boundary_connections[i_remote_part] = self.connection_from_dds(
+                        from_dd, from_dd.trace(BTAG_PARTITION(i_remote_part)))
+
+            from meshmode.distributed import MPIBoundaryCommSetupHelper
+            with MPIBoundaryCommSetupHelper(mpi_communicator, array_context,
+                    local_boundary_connections, grp_factory) as bdry_setup_helper:
+                while True:
+                    conns = bdry_setup_helper.complete_some()
+                    if not conns:
+                        break
+                    for i_remote_part, conn in conns.items():
+                        boundary_connections[i_remote_part] = conn
+
+        return boundary_connections
+
+    def distributed_boundary_swap_connection(self, dd):
+        """Provides a mapping from the base volume discretization
+        to the exterior boundary restriction on a parallel boundary
+        partition described by *dd*. This connection is used to
+        communicate across element boundaries in different parallel
+        partitions during distributed runs.
+
+        :arg dd: a :class:`~grudge.dof_desc.DOFDesc`, or a value
+            convertible to one. The domain tag must be a subclass
+            of :class:`grudge.dof_desc.BoundaryDomainTag` with an
+            associated :class:`meshmode.mesh.BTAG_PARTITION`
+            corresponding to a particular communication rank.
+        """
+        if dd.discretization_tag is not DISCR_TAG_BASE:
+            # FIXME
+            raise NotImplementedError(
+                "Distributed communication with discretization tag "
+                f"{dd.discretization_tag} is not implemented."
+            )
+
+        assert isinstance(dd.domain_tag, BoundaryDomainTag)
+        assert isinstance(dd.domain_tag.tag, BTAG_PARTITION)
+
+        vtag = dd.domain_tag.volume_tag
+
+        return self._dist_boundary_connections[vtag][dd.domain_tag.tag.part_id]
+
+    # }}}
+
     # {{{ discr_from_dd
 
     @memoize_method
@@ -421,15 +484,15 @@ class DiscretizationCollection:
         base_group_factory = self.group_factory_for_discretization_tag(
                 dd.discretization_tag)
 
-        def geo_group_factory(megrp, index):
+        def geo_group_factory(megrp):
             from modepy.shapes import Simplex
             from meshmode.discretization.poly_element import \
                     PolynomialEquidistantSimplexElementGroup
             if megrp.is_affine and issubclass(megrp._modepy_shape_cls, Simplex):
                 return PolynomialEquidistantSimplexElementGroup(
-                        megrp, order=0, index=index)
+                        megrp, order=0)
             else:
-                return base_group_factory(megrp, index)
+                return base_group_factory(megrp)
 
         from meshmode.discretization import Discretization
         geo_deriv_discr = Discretization(
@@ -930,7 +993,6 @@ def _generate_modal_group_factory(nodal_group_factory):
         )
 
 # }}}
-
 
 # {{{ make_discretization_collection
 
