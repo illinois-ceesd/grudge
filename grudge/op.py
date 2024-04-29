@@ -74,11 +74,12 @@ from arraycontext import (ArrayContext, map_array_container, tag_axes,
 
 from functools import partial
 
-from meshmode.dof_array import DOFArray, warn
+from meshmode.dof_array import DOFArray
 from meshmode.discretization.poly_element import (
     TensorProductElementGroupBase as TensorProductElementGroup,
     SimplexElementGroupBase as SimplexElementGroup)
-from meshmode.transform_metadata import (FirstAxisIsElementsTag,
+from meshmode.transform_metadata import (DiscretizationTopologicalDimAxisTag,
+                                         FirstAxisIsElementsTag,
                                          DiscretizationDOFAxisTag,
                                          DiscretizationElementAxisTag,
                                          DiscretizationFaceAxisTag,
@@ -441,10 +442,18 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
         `_gradient_kernel.compute_tensor_product_grad` for more details.
         """
 
-        vec = make_obj_array([
-            fold(grp.space, vec[func_axis])
-            for func_axis in range(vec.shape[0])
-        ])
+        vec = tag_axes(
+            actx,
+            {0: DiscretizationTopologicalDimAxisTag(),
+             1: DiscretizationElementAxisTag()},
+            fold(grp.space, vec)
+        )
+
+        vec = tag_axes(
+            actx,
+            { i: TensorProductDOFAxisTag(i-2) for i in range(2, grp.dim) },
+            vec
+        )
 
         if metric_in_matvec:
             stiff_1d, mass_1d = get_diff_mat(actx, grp, grp)
@@ -499,7 +508,7 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
         partials = partials.reshape(grp.dim, grp.dim, *partials.shape[-2:])
 
         div = actx.einsum(
-            'xrej,xrej->ej',
+            "xrej,xrej->ej",
             ijm,
             partials,
             arg_names=("inv_jac_t", "partials"),
@@ -507,7 +516,6 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
         )
 
         return div
-
 
     # }}}
 
