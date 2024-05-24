@@ -37,7 +37,7 @@ pytest_generate_tests = pytest_generate_tests_for_array_contexts(
 from meshmode.dof_array import flat_norm
 import meshmode.mesh.generation as mgen
 
-from grudge import DiscretizationCollection
+# from grudge import DiscretizationCollection
 
 import pytest
 
@@ -48,24 +48,51 @@ logger = logging.getLogger(__name__)
 
 # {{{ inverse metric
 
+@pytest.mark.parametrize("tpe", [True, False])
 @pytest.mark.parametrize("dim", [2, 3])
 @pytest.mark.parametrize("nonaffine", [False, True])
 @pytest.mark.parametrize("use_quad", [False, True])
-def test_inverse_metric(actx_factory, dim, nonaffine, use_quad):
+@pytest.mark.parametrize("use_gmsh", [False, True])
+@pytest.mark.parametrize("order", [1, 2, 3])
+def test_inverse_metric(actx_factory, tpe, dim, nonaffine, use_quad,
+                        use_gmsh, order):
     actx = actx_factory()
-
-    order = 3
-    mesh = mgen.generate_regular_rect_mesh(a=(-0.5,)*dim, b=(0.5,)*dim,
-            nelements_per_axis=(6,)*dim, order=order)
+    from meshmode.mesh import TensorProductElementGroup
+    group_cls = TensorProductElementGroup if tpe else None
+    mesh = mgen.generate_regular_rect_mesh(
+        a=(-0.5,)*dim, b=(0.5,)*dim, group_cls=group_cls,
+        nelements_per_axis=(6,)*dim, order=order)
+    if use_gmsh:
+        if dim < 3:
+            pytest.skip()
+        if tpe:
+            # https://github.com/inducer/meshmode/issues/403
+            from meshmode.mesh.io import read_gmsh
+            mesh_construction_kwargs = {
+                "force_positive_orientation": True
+            }
+            mesh = read_gmsh(
+                "simple_hexs.msh",
+                mesh_construction_kwargs=mesh_construction_kwargs
+            )
+        else:
+            # https://github.com/inducer/meshmode/issues/403
+            from meshmode.mesh.io import read_gmsh
+            mesh_construction_kwargs = {
+                "force_positive_orientation": True
+            }
+            mesh = read_gmsh("simple_tets.msh",
+                             mesh_construction_kwargs=mesh_construction_kwargs
+                             )
 
     if nonaffine:
         def m(x):
             result = np.empty_like(x)
             result[0] = (
                     1.5*x[0] + np.cos(x[0])
-                    + 0.1*np.sin(10*x[1]))
+                    + 0.1*np.sin(2*x[1]))
             result[1] = (
-                    0.05*np.cos(10*x[0])
+                    0.05*np.cos(2*x[0])
                     + 1.3*x[1] + np.sin(x[1]))
             if len(x) == 3:
                 result[2] = x[2]
@@ -75,17 +102,29 @@ def test_inverse_metric(actx_factory, dim, nonaffine, use_quad):
         mesh = map_mesh(mesh, m)
 
     from grudge.dof_desc import as_dofdesc, DISCR_TAG_BASE, DISCR_TAG_QUAD
-    from meshmode.discretization.poly_element import \
-            QuadratureSimplexGroupFactory, \
-            default_simplex_group_factory
-
-    dcoll = DiscretizationCollection(
-        actx, mesh,
-        discr_tag_to_group_factory={
-            DISCR_TAG_BASE: default_simplex_group_factory(base_dim=dim, order=order),
-            DISCR_TAG_QUAD: QuadratureSimplexGroupFactory(2*order + 1),
-        }
+    from meshmode.discretization.poly_element import (
+        QuadratureSimplexGroupFactory,
+        default_simplex_group_factory,
+        QuadratureGroupFactory,
+        LegendreGaussLobattoTensorProductGroupFactory as Lgl,
     )
+    from grudge.discretization import make_discretization_collection
+    if tpe:
+        dcoll = make_discretization_collection(
+            actx, mesh,
+            discr_tag_to_group_factory={
+                DISCR_TAG_BASE: Lgl(order),
+                DISCR_TAG_QUAD: QuadratureGroupFactory(3 * order)}
+        )
+    else:
+        dcoll = make_discretization_collection(
+            actx, mesh,
+            discr_tag_to_group_factory={
+                DISCR_TAG_BASE: default_simplex_group_factory(base_dim=dim,
+                                                              order=order),
+                DISCR_TAG_QUAD: QuadratureSimplexGroupFactory(2*order + 1),
+            }
+        )
 
     from grudge.geometry import \
         forward_metric_derivative_mat, inverse_metric_derivative_mat

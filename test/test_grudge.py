@@ -430,8 +430,9 @@ def test_tri_diff_mat(actx_factory, dim, order=4):
 
 # {{{ divergence theorem
 
-@pytest.mark.parametrize("case", ["circle", "tp_box2", "tp_box3", "gh-403"])
-def test_gauss_theorem(actx_factory, case, visualize=False):
+@pytest.mark.parametrize("case", ["tp_box3", "so_weird", "simple_tets",
+                                  "simple_hexs", "so_weird_tets", "actii_3d"])
+def test_gauss_theorem(actx_factory, case, visualize=True):
     """Verify Gauss's theorem explicitly on a mesh"""
 
     pytest.importorskip("meshpy")
@@ -453,7 +454,72 @@ def test_gauss_theorem(actx_factory, case, visualize=False):
     elif case == "gh-403":
         # https://github.com/inducer/meshmode/issues/403
         from meshmode.mesh.io import read_gmsh
-        mesh = read_gmsh("gh-403.msh")
+        mesh_construction_kwargs = {
+            "force_positive_orientation": True
+        }
+        mesh = read_gmsh("gh-403.msh",
+                         mesh_construction_kwargs=mesh_construction_kwargs
+                         )
+
+    elif case == "so_weird":
+        # https://github.com/inducer/meshmode/issues/403
+        from meshmode.mesh.io import read_gmsh
+        mesh_construction_kwargs = {
+            "force_positive_orientation": True
+        }
+        mesh = read_gmsh("so_weird.msh",
+                         mesh_construction_kwargs=mesh_construction_kwargs
+                         )
+
+    elif case == "so_weird":
+        # https://github.com/inducer/meshmode/issues/403
+        from meshmode.mesh.io import read_gmsh
+        mesh_construction_kwargs = {
+            "force_positive_orientation": True
+        }
+        mesh = read_gmsh("so_weird.msh",
+                         mesh_construction_kwargs=mesh_construction_kwargs
+                         )
+
+    elif case == "simple_tets":
+        # https://github.com/inducer/meshmode/issues/403
+        from meshmode.mesh.io import read_gmsh
+        mesh_construction_kwargs = {
+            "force_positive_orientation": True
+        }
+        mesh = read_gmsh("simple_tets.msh",
+                         mesh_construction_kwargs=mesh_construction_kwargs
+                         )
+
+    elif case == "simple_hexs":
+        # https://github.com/inducer/meshmode/issues/403
+        from meshmode.mesh.io import read_gmsh
+        mesh_construction_kwargs = {
+            "force_positive_orientation": True
+        }
+        mesh = read_gmsh("simple_hexs.msh",
+                         mesh_construction_kwargs=mesh_construction_kwargs
+                         )
+
+    elif case == "so_weird_tets":
+        # https://github.com/inducer/meshmode/issues/403
+        from meshmode.mesh.io import read_gmsh
+        mesh_construction_kwargs = {
+            "force_positive_orientation": True
+        }
+        mesh = read_gmsh("so_weird_tets.msh",
+                         mesh_construction_kwargs=mesh_construction_kwargs
+                         )
+
+    elif case == "actii_3d":
+        # https://github.com/inducer/meshmode/issues/403
+        from meshmode.mesh.io import read_gmsh
+        mesh_construction_kwargs = {
+            "force_positive_orientation": True
+        }
+        mesh = read_gmsh("actii_3d.msh",
+                         mesh_construction_kwargs=mesh_construction_kwargs
+                         )
 
     elif case.startswith("tp_box"):
         dim = int(case[-1])
@@ -469,8 +535,22 @@ def test_gauss_theorem(actx_factory, case, visualize=False):
     from meshmode.mesh import BTAG_ALL
 
     actx = actx_factory()
-
-    dcoll = make_discretization_collection(actx, mesh, order=2)
+    order = 1
+    from meshmode.discretization.poly_element import (
+        QuadratureGroupFactory,
+        LegendreGaussLobattoTensorProductGroupFactory as Lgl,
+    )
+    from grudge.dof_desc import (
+        DISCR_TAG_BASE,
+        DISCR_TAG_QUAD
+    )
+    # dcoll = make_discretization_collection(
+    #    actx, mesh,
+    #    discr_tag_to_group_factory={
+    #        DISCR_TAG_BASE: Lgl(order),
+    #        DISCR_TAG_QUAD: QuadratureGroupFactory(3 * order)}
+    #)
+    dcoll = make_discretization_collection(actx, mesh, order=order)
     volm_disc = dcoll.discr_from_dd(dof_desc.DD_VOLUME_ALL)
     x_volm = actx.thaw(volm_disc.nodes())
 
@@ -502,14 +582,15 @@ def test_gauss_theorem(actx_factory, case, visualize=False):
         from grudge.shortcuts import make_visualizer, make_boundary_visualizer
         vis = make_visualizer(dcoll)
         bvis = make_boundary_visualizer(dcoll)
-
+        print(f"Writing vis file: {case}")
         vis.write_vtk_file(
-            f"gauss-thm-{case}-vol.vtu", [("div_f", div_f),])
+            f"gauss-thm-{case}-vol.vtu", [("div_f", div_f),],
+            overwrite=True)
         bvis.write_vtk_file(
             f"gauss-thm-{case}-bdry.vtu", [
                 ("f_dot_n", f_dot_n),
                 ("normal", normal),
-            ])
+            ], overwrite=True)
 
     assert abs(int_1 - int_2) < 1e-13
 

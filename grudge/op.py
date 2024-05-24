@@ -206,6 +206,7 @@ def _single_axis_derivative_kernel(
         vec = fold(grp.space, vec)
 
         if metric_in_matvec:
+            print(f"Metric in matvec")
             stiff_1d, mass_1d = get_diff_mat(actx, grp, grp)
 
             apply_mass_axes = set(range(grp.dim)) - {xyz_axis}
@@ -236,6 +237,7 @@ def _single_axis_derivative_kernel(
             )
 
         else:
+            print(f"Metric not in matvec")
             diff_mat = get_diff_mat(actx, grp, grp)
 
             ref_derivative = unfold(
