@@ -420,45 +420,47 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
 
     # {{{ tensor product div
 
-    def compute_tensor_product_div(actx, grp, diff_mat, vec, ijm):
+    def compute_tensor_product_div(actx, in_grp, out_grp, diff_mat, vec, ijm):
         """
         Exploits tensor product structure to reduce complexity. See
         `_gradient_kernel.compute_tensor_product_grad` for more details.
         """
 
-        if grp.dim > 3 and metric_in_matvec:
+        if ((in_grp.dim > 3 and metric_in_matvec) or (in_grp != out_grp)):
             warn('Efficient tensor product weak '
                  'differentiation operators only '
                  'implemented for dimension 2 and 3. '
                  'Defaulting to inefficient version.')
-            return compute_simplicial_div(actx, grp, grp, diff_mat, vec, ijm,
+            return compute_simplicial_div(actx, in_grp, out_grp, diff_mat, vec, ijm,
                                           metric_in_matvec)
 
         vec = make_obj_array([
-            fold(grp.space, vec[func_axis])
+            fold(in_grp.space, vec[func_axis])
             for func_axis in range(vec.shape[0])
         ])
-
+        # print(" ===== TENSOR PRODUCT DIV ======")
         if metric_in_matvec:
-            stiff_1d, mass_1d = get_diff_mat(actx, grp, grp)
+            stiff_1d, mass_1d = get_diff_mat(actx, in_grp, out_grp)
+            # print(f"{stiff_1d.shape=}")
+            # print(f"{mass_1d.shape=}")
 
             partials = []
             for func_axis in range(vec.shape[0]):
                 ref = []
-                for xyz_axis in range(grp.dim):
+                for xyz_axis in range(in_grp.dim):
                     ref.append(vec[func_axis])
 
-                    apply_mass_axes = set(range(grp.dim)) - {xyz_axis}
+                    apply_mass_axes = set(range(in_grp.dim)) - {xyz_axis}
                     for ax in apply_mass_axes:
                         ref[xyz_axis] = single_axis_operator_application(
-                            actx, grp.dim, mass_1d, ax, ref[xyz_axis],
+                            actx, in_grp.dim, mass_1d, ax, ref[xyz_axis],
                             tags=(FirstAxisIsElementsTag(),
                                   OutputIsTensorProductDOFArrayOrdered(),),
                             arg_names=("mass_1d", f"vec_{func_axis}_{xyz_axis}")
                         )
 
                     ref[xyz_axis] = single_axis_operator_application(
-                        actx, grp.dim, stiff_1d, xyz_axis, ref[xyz_axis],
+                        actx, in_grp.dim, stiff_1d, xyz_axis, ref[xyz_axis],
                         tags=(FirstAxisIsElementsTag(),
                               OutputIsTensorProductDOFArrayOrdered(),),
                         arg_names=("stiff_1d", f"vec_{func_axis}_{xyz_axis}")
@@ -467,16 +469,17 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
                 partials.append(ref)
 
         else:
-            diff_mat = get_diff_mat(actx, grp, grp)
+            # print(" ---- metric NOT in matvec ")
+            diff_mat = get_diff_mat(actx, in_grp, out_grp)
 
             partials = []
             for func_axis in range(vec.shape[0]):
                 ref = []
-                for xyz_axis in range(grp.dim):
+                for xyz_axis in range(in_grp.dim):
                     ref.append(vec[func_axis])
 
                     ref[xyz_axis] = single_axis_operator_application(
-                        actx, grp.dim, diff_mat, xyz_axis, ref[xyz_axis],
+                        actx, in_grp.dim, diff_mat, xyz_axis, ref[xyz_axis],
                         tags=(FirstAxisIsElementsTag(),
                               OutputIsTensorProductDOFArrayOrdered(),),
                         arg_names=("diff_mat", f"vec_{func_axis}_{xyz_axis}")
@@ -485,11 +488,11 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
                 partials.append(ref)
 
         partials = actx.np.stack([
-            unfold(grp.space, partials[func_axis][xyz_axis])
-            for func_axis in range(grp.dim)
-            for xyz_axis in range(grp.dim)
+            unfold(out_grp.space, partials[func_axis][xyz_axis])
+            for func_axis in range(out_grp.dim)
+            for xyz_axis in range(out_grp.dim)
         ])
-        partials = partials.reshape(grp.dim, grp.dim, *partials.shape[-2:])
+        partials = partials.reshape(out_grp.dim, out_grp.dim, *partials.shape[-2:])
 
         div = actx.einsum(
             'xrej,xrej->ej',
@@ -507,6 +510,7 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
 
     def compute_simplicial_div(actx, in_grp, out_grp, get_diff_mat, vec_i,
                                ijm_i, metric_in_matvec):
+        # print("===== ==== SIMPLICIAL DIV =======")
         return actx.einsum(
             "xrej,rij,xej->ei" if metric_in_matvec else "xrei,rij,xej->ei",
             ijm_i,
@@ -524,7 +528,8 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
 
     per_group_divs = [
 
-        compute_tensor_product_div(actx, in_grp, get_diff_mat, vec_i, ijm_i)
+        compute_tensor_product_div(actx, in_grp, out_grp, get_diff_mat, vec_i,
+                                   ijm_i)
         if isinstance(in_grp, TensorProductElementGroup)
 
         # r for rst axis

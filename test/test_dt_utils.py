@@ -33,9 +33,10 @@ pytest_generate_tests = pytest_generate_tests_for_array_contexts(
         [PytestPyOpenCLArrayContextFactory,
          PytestPytatoPyOpenCLArrayContextFactory])
 
-from grudge import make_discretization_collection
-
+from grudge import DiscretizationCollection
 import grudge.op as op
+
+import mesh_data
 
 import pytest
 
@@ -45,47 +46,32 @@ import logging
 logger = logging.getLogger(__name__)
 from meshmode import _acf  # noqa: F401
 
-
-@pytest.mark.parametrize("name", ["interval", "box2d", "box3d"])
 @pytest.mark.parametrize("tpe", [False, True])
-def test_geometric_factors_regular_refinement(actx_factory, name, tpe):
+@pytest.mark.parametrize("name", ["interval", "box2d", "box3d"])
+def test_geometric_factors_regular_refinement(actx_factory, tpe, name):
     from grudge.dt_utils import dt_geometric_factors
 
     actx = actx_factory()
 
     # {{{ cases
 
-    from meshmode.mesh import TensorProductElementGroup
-    group_cls = TensorProductElementGroup if tpe else None
-
     if name == "interval":
-        from mesh_data import BoxMeshBuilder
-        builder = BoxMeshBuilder(ambient_dim=1, group_cls=group_cls)
+        builder = mesh_data.BoxMeshBuilder1D()
     elif name == "box2d":
-        from mesh_data import BoxMeshBuilder
-        builder = BoxMeshBuilder(ambient_dim=2, group_cls=group_cls)
+        builder = mesh_data.BoxMeshBuilder2D()
     elif name == "box3d":
-        from mesh_data import BoxMeshBuilder
-        builder = BoxMeshBuilder(ambient_dim=3, group_cls=group_cls)
+        builder = mesh_data.BoxMeshBuilder3D()
     else:
         raise ValueError("unknown geometry name: %s" % name)
 
     # }}}
 
-    from meshmode.discretization.poly_element import \
-        LegendreGaussLobattoTensorProductGroupFactory as Lgl
-
-    from grudge.dof_desc import DISCR_TAG_BASE
-    dtag_to_grp_fac = {
-        DISCR_TAG_BASE: Lgl(builder.order)
-    } if tpe else None
-    order = None if tpe else builder.order
+    order = 4
 
     min_factors = []
     for resolution in builder.resolutions:
-        mesh = builder.get_mesh(resolution, builder.mesh_order)
-        dcoll = make_discretization_collection(actx, mesh, order=order,
-                                               discr_tag_to_group_factory=dtag_to_grp_fac)
+        mesh = builder.get_mesh(resolution, order)
+        dcoll = DiscretizationCollection(actx, mesh, order=order)
         min_factors.append(
             actx.to_numpy(
                 op.nodal_min(dcoll, "vol", actx.thaw(dt_geometric_factors(dcoll))))
@@ -99,9 +85,8 @@ def test_geometric_factors_regular_refinement(actx_factory, name, tpe):
 
     # Make sure it works with empty meshes
     if not tpe:
-        mesh = builder.get_mesh(0, builder.mesh_order)
-        dcoll = make_discretization_collection(actx, mesh, order=order,
-                                               discr_tag_to_group_factory=dtag_to_grp_fac)
+        mesh = builder.get_mesh(0)
+        dcoll = DiscretizationCollection(actx, mesh, order=order)
         factors = actx.thaw(dt_geometric_factors(dcoll))  # noqa: F841
 
 
@@ -114,14 +99,11 @@ def test_non_geometric_factors(actx_factory, name):
     # {{{ cases
 
     if name == "interval":
-        from mesh_data import BoxMeshBuilder
-        builder = BoxMeshBuilder(ambient_dim=1)
+        builder = mesh_data.BoxMeshBuilder1D()
     elif name == "box2d":
-        from mesh_data import BoxMeshBuilder
-        builder = BoxMeshBuilder(ambient_dim=2)
+        builder = mesh_data.BoxMeshBuilder2D()
     elif name == "box3d":
-        from mesh_data import BoxMeshBuilder
-        builder = BoxMeshBuilder(ambient_dim=3)
+        builder = mesh_data.BoxMeshBuilder3D()
     else:
         raise ValueError("unknown geometry name: %s" % name)
 
@@ -131,7 +113,7 @@ def test_non_geometric_factors(actx_factory, name):
     degrees = list(range(1, 8))
     for degree in degrees:
         mesh = builder.get_mesh(1, degree)
-        dcoll = make_discretization_collection(actx, mesh, order=degree)
+        dcoll = DiscretizationCollection(actx, mesh, order=degree)
         factors.append(min(dt_non_geometric_factors(dcoll)))
 
     # Crude estimate, factors should behave like 1/N**2
@@ -150,7 +132,7 @@ def test_build_jacobian(actx_factory):
     mesh = mgen.generate_regular_rect_mesh(a=[0], b=[1], nelements_per_axis=(3,))
     assert mesh.dim == 1
 
-    dcoll = make_discretization_collection(actx, mesh, order=1)
+    dcoll = DiscretizationCollection(actx, mesh, order=1)
 
     def rhs(x):
         return 3*x**2 + 2*x + 5
@@ -167,19 +149,8 @@ def test_build_jacobian(actx_factory):
 
 @pytest.mark.parametrize("dim", [1, 2])
 @pytest.mark.parametrize("degree", [2, 4])
-@pytest.mark.parametrize("tpe", [False, True])
-def test_wave_dt_estimate(actx_factory, dim, degree, tpe, visualize=False):
-
+def test_wave_dt_estimate(actx_factory, dim, degree, visualize=False):
     actx = actx_factory()
-
-    if tpe:
-        if dim == 1:
-            pytest.skip()
-
-    # {{{ cases
-
-    from meshmode.mesh import TensorProductElementGroup
-    group_cls = TensorProductElementGroup if tpe else None
 
     import meshmode.mesh.generation as mgen
 
@@ -187,24 +158,10 @@ def test_wave_dt_estimate(actx_factory, dim, degree, tpe, visualize=False):
     b = [1, 1, 1]
     mesh = mgen.generate_regular_rect_mesh(
             a=a[:dim], b=b[:dim],
-            nelements_per_axis=(3,)*dim,
-            group_cls=group_cls)
-
+            nelements_per_axis=(3,)*dim)
     assert mesh.dim == dim
 
-    from meshmode.discretization.poly_element import \
-        LegendreGaussLobattoTensorProductGroupFactory as Lgl
-
-    from grudge.dof_desc import DISCR_TAG_BASE
-    order = degree
-    dtag_to_grp_fac = None
-    if tpe:
-        order = None
-        dtag_to_grp_fac = {
-            DISCR_TAG_BASE: Lgl(degree)
-        }
-    dcoll = make_discretization_collection(actx, mesh, order=order,
-                                     discr_tag_to_group_factory=dtag_to_grp_fac)
+    dcoll = DiscretizationCollection(actx, mesh, order=degree)
 
     from grudge.models.wave import WeakWaveOperator
     wave_op = WeakWaveOperator(dcoll, c=1)
@@ -229,7 +186,6 @@ def test_wave_dt_estimate(actx_factory, dim, degree, tpe, visualize=False):
         RK4MethodBuilder.output_coeffs))
 
     dt_est = actx.to_numpy(wave_op.estimate_rk4_timestep(actx, dcoll))
-    print(f"{dt_est=}")
 
     if visualize:
         re, im = np.mgrid[-4:1:30j, -5:5:30j]
@@ -258,70 +214,6 @@ def test_wave_dt_estimate(actx_factory, dim, degree, tpe, visualize=False):
         print("Stable timestep estimate appears to be sharp")
     assert not stable_dt_factors or max(stable_dt_factors) < 1.5, stable_dt_factors
 
-
-@pytest.mark.parametrize("dim", [2])
-@pytest.mark.parametrize("degree", [1, 2])
-@pytest.mark.parametrize("tpe", [True])
-def test_charlen(actx_factory, dim, degree, tpe, visualize=False):
-
-    from grudge.dt_utils import (
-        dt_geometric_factors,
-        dt_non_geometric_factors,
-        h_min_from_volume,
-        h_max_from_volume
-    )
-    actx = actx_factory()
-
-    if tpe:
-        if dim == 1:
-            pytest.skip()
-
-    # {{{ cases
-
-    from meshmode.mesh import TensorProductElementGroup
-    group_cls = TensorProductElementGroup if tpe else None
-
-    import meshmode.mesh.generation as mgen
-
-    a = [0, 0, 0]
-    b = [1, 1, 1]
-    nels1d = [2, 3, 4]
-
-    for nel1d in nels1d:
-        print(f"{dim=},{nel1d=},{degree=}")
-        mesh = mgen.generate_regular_rect_mesh(
-            a=a[:dim], b=b[:dim],
-            nelements_per_axis=(nel1d,)*dim,
-            group_cls=group_cls)
-        print(f"{mesh=}")
-        assert mesh.dim == dim
-
-        from meshmode.discretization.poly_element import \
-            LegendreGaussLobattoTensorProductGroupFactory as Lgl
-
-        from grudge.dof_desc import DISCR_TAG_BASE
-        order = degree
-        dtag_to_grp_fac = None
-        if tpe:
-            order = None
-            dtag_to_grp_fac = {
-                DISCR_TAG_BASE: Lgl(degree)
-            }
-        
-        dcoll = make_discretization_collection(actx, mesh, order=order,
-                                         discr_tag_to_group_factory=dtag_to_grp_fac)
-
-        h_min = actx.to_numpy(h_min_from_volume(dcoll))
-        h_max = actx.to_numpy(h_max_from_volume(dcoll))
-        gfac = actx.to_numpy(dt_geometric_factors(dcoll))
-        ngfac = dt_non_geometric_factors(dcoll)
-
-        print(f"{h_min=}")
-        print(f"{h_max=}")
-        print(f"{gfac=}")
-        print(f"{ngfac=}")
-
-    assert False
 
 # You can test individual routines by typing
 # $ python test_grudge.py 'test_routine()'
