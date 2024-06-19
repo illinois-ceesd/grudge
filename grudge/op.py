@@ -197,7 +197,6 @@ def _single_axis_derivative_kernel(
     #   or inside (weak) the matrix-vector product that carries out the
     #   derivative, cf. "metric_in_matvec".
 
-
     # {{{ tensor product single axis derivative
 
     def compute_tensor_product_derivative(actx, grp, get_diff_mat, vec, ijm,
@@ -228,7 +227,7 @@ def _single_axis_derivative_kernel(
             )
 
             derivative = actx.einsum(
-                'rej,ej->ej',
+                "rej,ej->ej",
                 ijm[xyz_axis],
                 ref_weak_derivative,
                 tagged=(FirstAxisIsElementsTag(),),
@@ -248,7 +247,7 @@ def _single_axis_derivative_kernel(
             )
 
             derivative = actx.einsum(
-                'rej,ej->ej',
+                "rej,ej->ej",
                 ijm[xyz_axis],
                 ref_derivative,
                 tagged=(FirstAxisIsElementsTag(),),
@@ -258,7 +257,6 @@ def _single_axis_derivative_kernel(
         return derivative
 
     # }}}
-
 
     # {{{ simplicial single axis derivative
 
@@ -279,7 +277,6 @@ def _single_axis_derivative_kernel(
 
     # }}}
 
-
     return DOFArray(
         actx,
         data=tuple(
@@ -299,7 +296,6 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
     # See _single_axis_derivative_kernel for comments on the usage scenarios
     # (both strong and weak derivative) and their differences.
 
-
     # {{{ tensor product gradient
 
     def compute_tensor_product_grad(actx, grp, diff_mat, vec, ijm,
@@ -310,10 +306,10 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
         """
 
         if grp.dim > 3 and metric_in_matvec:
-            warn('Efficient tensor product weak '
-                'differentiation operators only '
-                'implemented for dimension 2 and 3. '
-                'Defaulting to inefficient version.')
+            warn("Efficient tensor product weak "
+                 "differentiation operators only "
+                 "implemented for dimension 2 and 3. "
+                 "Defaulting to inefficient version.")
             return compute_simplicial_grad(actx, grp, grp, diff_mat, vec, ijm,
                                            metric_in_matvec)
 
@@ -334,8 +330,7 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
                         actx, grp.dim, mass_1d, ax, grad[xyz_axis],
                         tags=(FirstAxisIsElementsTag(),
                               OutputIsTensorProductDOFArrayOrdered(),),
-                        arg_names=("mass_1d", f"vec_{xyz_axis}")
-                )
+                        arg_names=("mass_1d", f"vec_{xyz_axis}"))
 
                 # apply stiffness operator and unfold
                 grad[xyz_axis] = unfold(
@@ -369,11 +364,10 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
             ijm,
             grad,
             tagged=(FirstAxisIsElementsTag(),),
-            arg_names=("inv_jac_t", f"grad")
+            arg_names=("inv_jac_t", "grad")
         )
 
     # }}}
-
 
     # {{{ simplicial grad
 
@@ -392,7 +386,6 @@ def _gradient_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec,
             tagged=(FirstAxisIsElementsTag(),))
 
     # }}}
-
 
     per_group_grads = [
         compute_tensor_product_grad(actx, in_grp, get_diff_mat, vec_i, ijm_i,
@@ -417,7 +410,6 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
     # See _single_axis_derivative_kernel for comments on the usage scenarios
     # (both strong and weak derivative) and their differences.
 
-
     # {{{ tensor product div
 
     def compute_tensor_product_div(actx, in_grp, out_grp, diff_mat, vec, ijm):
@@ -427,10 +419,10 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
         """
 
         if ((in_grp.dim > 3 and metric_in_matvec) or (in_grp != out_grp)):
-            warn('Efficient tensor product weak '
-                 'differentiation operators only '
-                 'implemented for dimension 2 and 3. '
-                 'Defaulting to inefficient version.')
+            warn("Efficient tensor product weak "
+                 "differentiation operators only "
+                 "implemented for dimension 2 and 3. "
+                 "Defaulting to inefficient version.")
             return compute_simplicial_div(actx, in_grp, out_grp, diff_mat, vec, ijm,
                                           metric_in_matvec)
 
@@ -438,11 +430,9 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
             fold(in_grp.space, vec[func_axis])
             for func_axis in range(vec.shape[0])
         ])
-        # print(" ===== TENSOR PRODUCT DIV ======")
+
         if metric_in_matvec:
             stiff_1d, mass_1d = get_diff_mat(actx, in_grp, out_grp)
-            # print(f"{stiff_1d.shape=}")
-            # print(f"{mass_1d.shape=}")
 
             partials = []
             for func_axis in range(vec.shape[0]):
@@ -469,7 +459,6 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
                 partials.append(ref)
 
         else:
-            # print(" ---- metric NOT in matvec ")
             diff_mat = get_diff_mat(actx, in_grp, out_grp)
 
             partials = []
@@ -495,7 +484,7 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
         partials = partials.reshape(out_grp.dim, out_grp.dim, *partials.shape[-2:])
 
         div = actx.einsum(
-            'xrej,xrej->ej',
+            "xrej,xrej->ej",
             ijm,
             partials,
             arg_names=("inv_jac_t", "partials"),
@@ -505,12 +494,10 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
         return div
     # }}}
 
-
     # {{{ simplicial div
 
     def compute_simplicial_div(actx, in_grp, out_grp, get_diff_mat, vec_i,
                                ijm_i, metric_in_matvec):
-        # print("===== ==== SIMPLICIAL DIV =======")
         return actx.einsum(
             "xrej,rij,xej->ei" if metric_in_matvec else "xrei,rij,xej->ei",
             ijm_i,
@@ -524,7 +511,6 @@ def _divergence_kernel(actx, out_discr, in_discr, get_diff_mat, inv_jac_mat, vec
             tagged=(FirstAxisIsElementsTag(),))
 
     # }}}
-
 
     per_group_divs = [
 
@@ -576,8 +562,8 @@ def _reference_derivative_matrices(actx: ArrayContext,
             return actx.freeze(
                     actx.tag(NameHint("tp_diff_mat_1d"),
                              tag_axes(actx, {
-                                1: DiscretizationDOFAxisTag()},
-                                diff_mat)))
+                                 1: DiscretizationDOFAxisTag()},
+                                      diff_mat)))
 
         elif isinstance(grp, SimplexElementGroup):
             from meshmode.discretization.poly_element import diff_matrices
@@ -1185,7 +1171,6 @@ def _apply_inverse_mass_operator(
     inv_area_elements = 1./area_element(actx, dcoll, dd=dd_in,
             _use_geoderiv_connection=actx.supports_nonscalar_broadcasting)
 
-
     def apply_to_tensor_product_elements(grp, jac_inv, vec, ref_inv_mass):
 
         vec = fold(grp.space, vec)
@@ -1206,7 +1191,6 @@ def _apply_inverse_mass_operator(
             tagged=(FirstAxisIsElementsTag(),)
         )
 
-
     def apply_to_simplicial_elements(jac_inv, vec, ref_inv_mass):
 
         # Based on https://arxiv.org/pdf/1608.03836.pdf
@@ -1217,7 +1201,6 @@ def _apply_inverse_mass_operator(
             ref_inv_mass,
             vec,
             tagged=(FirstAxisIsElementsTag(),))
-
 
     group_data = [
         apply_to_tensor_product_elements(
@@ -1487,11 +1470,11 @@ def single_axis_operator_application(actx, dim, operator, axis, data,
     if not isinstance(tags, tuple):
         raise TypeError("arg_names must be a tuple.")
 
-    operator_spec = 'ij'
+    operator_spec = "ij"
     data_spec = f'e{"abcdefghklm"[:axis]}j{"nopqrstuvwxyz"[:dim-axis-1]}'
     out_spec = f'e{"abcdefghklm"[:axis]}i{"nopqrstuvwxyz"[:dim-axis-1]}'
 
-    spec = operator_spec + ',' + data_spec + '->' + out_spec
+    spec = operator_spec + "," + data_spec + "->" + out_spec
 
     return actx.einsum(spec, operator, data,
                        arg_names=arg_names,

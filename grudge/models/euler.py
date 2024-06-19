@@ -327,10 +327,7 @@ def euler_numerical_flux(
         exterior=euler_volume_flux(dcoll, q_rr, gamma)
     )
     num_flux = flux_tpair.avg
-    normal = geo.normal(actx, dcoll, dd_intfaces)
-
-    if lf_stabilization:
-        from arraycontext import outer
+    normal = geo.normal(actx, dcoll, tpair.dd)
 
     if dissipation:
         # Compute jump penalization parameter
@@ -394,13 +391,6 @@ class EulerOperator(HyperbolicOperator):
             for tpair in op.interior_trace_pairs(dcoll, q)
         ]
 
-        # Compute volume derivatives
-        volume_derivs = op.weak_local_div(
-            dcoll, dd_vol_quad,
-            euler_volume_flux(
-                dcoll, op.project(dcoll, dd_base, dd_vol_quad, q), gamma)
-        )
-
         # Compute interior interface fluxes
         interface_fluxes = (
             sum(
@@ -433,6 +423,13 @@ class EulerOperator(HyperbolicOperator):
                     )
                 )
                 interface_fluxes = interface_fluxes + bc_flux
+
+        # Compute volume derivatives
+        volume_derivs = op.weak_local_div(
+            dcoll, dd_vol_quad,
+            euler_volume_flux(
+                dcoll, op.project(dcoll, dd_base, dd_vol_quad, q), gamma)
+        )
 
         return op.inverse_mass(
             dcoll,
