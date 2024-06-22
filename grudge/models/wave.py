@@ -189,7 +189,13 @@ class WeakWaveOperator(HyperbolicOperator):
 
     def estimate_rk4_timestep(self, actx, dcoll, **kwargs):
         # FIXME: Sketchy, empirically determined fudge factor
-        return 0.38 * super().estimate_rk4_timestep(actx,  dcoll, **kwargs)
+        from meshmode.discretization.poly_element import SimplexElementGroupBase
+        from grudge.dof_desc import DD_VOLUME_ALL
+        volm_discr = dcoll.discr_from_dd(DD_VOLUME_ALL)
+        tpe = any(not isinstance(grp, SimplexElementGroupBase)
+                  for grp in volm_discr.groups)
+        fudge_fac = 0.38 if not tpe else 0.23
+        return fudge_fac * super().estimate_rk4_timestep(actx,  dcoll, **kwargs)
 
 # }}}
 

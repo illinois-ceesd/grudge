@@ -23,6 +23,7 @@ THE SOFTWARE.
 """
 
 
+from meshmode.mesh import TensorProductElementGroup
 import numpy as np
 
 import pyopencl as cl
@@ -35,10 +36,8 @@ from grudge.array_context import (
 from grudge.models.euler import (
     ConservedEulerField,
     EulerOperator,
-    EntropyStableEulerOperator,
     InviscidWallBC
 )
-from meshmode.mesh import TensorProductElementGroup
 from grudge.shortcuts import rk4_step
 
 from meshmode.mesh import BTAG_ALL
@@ -112,25 +111,9 @@ def acoustic_pulse_condition(x_vec, t=0):
 def run_acoustic_pulse(actx,
                        order=3,
                        final_time=1,
-                       resolution=16,
-                       esdg=False,
+                       resolution=4,
                        overintegration=False,
-                       visualize=False,
-                       tpe=False):
-
-    logger.info(
-        """
-        Acoustic pulse parameters:\n
-        order: %s\n
-        final_time: %s\n
-        resolution: %s\n
-        entropy stable: %s\n
-        overintegration: %s\n
-        visualize: %s
-        """,
-        order, final_time, resolution, esdg,
-        overintegration, visualize
-    )
+                       visualize=False):
 
     # eos-related parameters
     gamma = 1.4
@@ -139,31 +122,21 @@ def run_acoustic_pulse(actx,
 
     from meshmode.mesh.generation import generate_regular_rect_mesh
 
-    dim = 2
+    dim = 3
     box_ll = -0.5
     box_ur = 0.5
-    group_cls = TensorProductElementGroup if tpe else None
     mesh = generate_regular_rect_mesh(
         a=(box_ll,)*dim,
         b=(box_ur,)*dim,
         nelements_per_axis=(resolution,)*dim,
-        group_cls=group_cls)
+        group_cls=TensorProductElementGroup)
 
     from grudge import DiscretizationCollection
     from grudge.dof_desc import DISCR_TAG_BASE, DISCR_TAG_QUAD
-    from meshmode.discretization.poly_element import (
-        InterpolatoryEdgeClusteredGroupFactory,
-        QuadratureGroupFactory)
+    from meshmode.discretization.poly_element import \
+        LegendreGaussLobattoTensorProductGroupFactory as LGL
 
-    if esdg:
-        case = "esdg-pulse"
-        operator_cls = EntropyStableEulerOperator
-    else:
-        case = "pulse"
-        operator_cls = EulerOperator
-
-    exp_name = f"fld-{case}-N{order}-K{resolution}"
-
+    exp_name = f"fld-acoustic-pulse-N{order}-K{resolution}"
     if overintegration:
         exp_name += "-overintegrated"
         quad_tag = DISCR_TAG_QUAD
@@ -173,8 +146,7 @@ def run_acoustic_pulse(actx,
     dcoll = DiscretizationCollection(
         actx, mesh,
         discr_tag_to_group_factory={
-            DISCR_TAG_BASE: InterpolatoryEdgeClusteredGroupFactory(order),
-            DISCR_TAG_QUAD: QuadratureGroupFactory(2*order)
+            DISCR_TAG_BASE: LGL(order)
         }
     )
 
@@ -182,7 +154,7 @@ def run_acoustic_pulse(actx,
 
     # {{{ Euler operator
 
-    euler_operator = operator_cls(
+    euler_operator = EulerOperator(
         dcoll,
         bdry_conditions={BTAG_ALL: InviscidWallBC()},
         flux_type="lf",
@@ -239,8 +211,7 @@ def run_acoustic_pulse(actx,
 
 
 def main(ctx_factory, order=3, final_time=1, resolution=16,
-         overintegration=False, visualize=False, lazy=False,
-         esdg=False, tpe=False):
+         overintegration=False, visualize=False, lazy=False):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
@@ -256,20 +227,13 @@ def main(ctx_factory, order=3, final_time=1, resolution=16,
             force_device_scalars=True,
         )
 
-    if not actx.supports_nonscalar_broadcasting and esdg is True:
-        raise RuntimeError(
-            "Cannot use ESDG with an array context that cannot perform "
-            "nonscalar broadcasting. Run with --lazy instead."
-        )
-
     run_acoustic_pulse(
         actx,
         order=order,
         resolution=resolution,
-        esdg=esdg,
         overintegration=overintegration,
         final_time=final_time,
-        visualize=visualize, tpe=tpe
+        visualize=visualize
     )
 
 
@@ -280,16 +244,12 @@ if __name__ == "__main__":
     parser.add_argument("--order", default=3, type=int)
     parser.add_argument("--tfinal", default=0.1, type=float)
     parser.add_argument("--resolution", default=16, type=int)
-    parser.add_argument("--esdg", action="store_true",
-                        help="use entropy stable dg")
     parser.add_argument("--oi", action="store_true",
                         help="use overintegration")
     parser.add_argument("--visualize", action="store_true",
                         help="write out vtk output")
     parser.add_argument("--lazy", action="store_true",
                         help="switch to a lazy computation mode")
-    parser.add_argument("--tpe", action="store_true",
-                        help="use tensor product elements")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -297,7 +257,6 @@ if __name__ == "__main__":
          order=args.order,
          final_time=args.tfinal,
          resolution=args.resolution,
-         esdg=args.esdg,
          overintegration=args.oi,
          visualize=args.visualize,
-         lazy=args.lazy, tpe=args.tpe)
+         lazy=args.lazy)
