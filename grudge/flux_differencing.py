@@ -45,7 +45,7 @@ from meshmode.dof_array import DOFArray
 
 from grudge.discretization import DiscretizationCollection
 from grudge.dof_desc import DOFDesc
-
+import modepy as mp
 from pytools import memoize_in, keyed_memoize_in
 
 import numpy as np
@@ -64,7 +64,6 @@ def _reference_skew_symmetric_hybridized_sbp_operators(
             face_quad_grp.discretization_key()))
     def get_reference_skew_symetric_hybridized_diff_mats(
             base_grp, quad_vol_grp, face_quad_grp):
-        from meshmode.discretization.poly_element import diff_matrices
         from modepy import faces_for_shape, face_normal
         from grudge.interpolation import (
             volume_quadrature_interpolation_matrix,
@@ -113,7 +112,8 @@ def _reference_skew_symmetric_hybridized_sbp_operators(
         # {{{ Hybridized (volume + surface) operators
 
         q_mats = [p_mat.T @ (weights * vdm_q.T @ vdm_q) @ diff_mat @ p_mat
-                  for diff_mat in diff_matrices(base_grp)]
+                  for diff_mat in mp.diff_matrices(base_grp.basis_obj(),
+                                                   base_grp.unit_nodes)]
         e_mat = vf_mat @ p_mat
         q_skew_hybridized = np.asarray(
             [

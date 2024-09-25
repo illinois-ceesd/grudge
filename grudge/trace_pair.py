@@ -555,7 +555,11 @@ class _RankBoundaryCommunicationEager:
             remote_bdry_data_template: ArrayOrContainer,
             comm_tag: Optional[Hashable] = None):
 
-        comm = dcoll.mpi_communicator
+        # inducer/grudge@main has this 
+        # local_bdry_data = project(dcoll, volume_dd, bdry_dd, array_container)
+
+        comm = actx.mpi_communicator
+
         assert comm is not None
 
         remote_rank = remote_part_id.rank
