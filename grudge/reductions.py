@@ -518,6 +518,50 @@ def elementwise_integral(
     )
 
 
+def elementwise_integration(
+        dcoll: DiscretizationCollection, *args) -> ArrayOrContainer:
+    """Numerically integrates a function represented by a
+    :class:`~meshmode.dof_array.DOFArray` of degrees of freedom in
+    each element of a discretization, given by *dd*.
+
+    May be called with ``(vec)`` or ``(dd, vec)``.
+
+    The input *vec* can either be a :class:`~meshmode.dof_array.DOFArray` or
+    an :class:`~arraycontext.ArrayContainer` with
+    :class:`~meshmode.dof_array.DOFArray` entries. If the underlying
+    array context (see :class:`arraycontext.ArrayContext`) for *vec*
+    supports nonscalar broadcasting, all :class:`~meshmode.dof_array.DOFArray`
+    entries will contain a single value for each element. Otherwise, the
+    entries will have the same number of degrees of freedom as *vec*, but
+    set to the same value.
+
+    :arg dcoll: a :class:`grudge.discretization.DiscretizationCollection`.
+    :arg dd: a :class:`~grudge.dof_desc.DOFDesc`, or a value convertible to one.
+        Defaults to the base volume discretization if not provided.
+    :arg vec: a :class:`~meshmode.dof_array.DOFArray` or an
+        :class:`~arraycontext.ArrayContainer` of them.
+    :returns: a :class:`~meshmode.dof_array.DOFArray` or an
+        :class:`~arraycontext.ArrayContainer` like *vec* containing the
+        elementwise integral if *vec*.
+    """
+    if len(args) == 1:
+        vec, = args
+        dd = dof_desc.DD_VOLUME_ALL
+    elif len(args) == 2:
+        dd, vec = args
+    else:
+        raise TypeError("invalid number of arguments")
+
+    dd = dof_desc.as_dofdesc(dd)
+
+    from grudge.op import _apply_mass_operator
+
+    ones = dcoll.discr_from_dd(dd).zeros(vec.array_context) + 1.0
+    return elementwise_sum(
+        dcoll, dd, vec * _apply_mass_operator(dcoll, dd, dd, ones)
+    )
+
+
 def elementwise_integral_quad(
         dcoll: DiscretizationCollection, *args) -> ArrayOrContainer:
     """Numerically integrates a function represented by a
