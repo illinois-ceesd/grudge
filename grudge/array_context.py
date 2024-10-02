@@ -3,6 +3,7 @@
 .. autoclass:: PytatoPyOpenCLArrayContext
 .. autoclass:: MPIBasedArrayContext
 .. autoclass:: MPIPyOpenCLArrayContext
+.. autoclass:: MPINumpyArrayContext
 .. class:: MPIPytatoArrayContext
 .. autofunction:: get_reasonable_array_context_class
 """
@@ -122,8 +123,7 @@ if TYPE_CHECKING:
 
 class PyOpenCLArrayContext(_PyOpenCLArrayContextBase):
     """Inherits from :class:`meshmode.array_context.PyOpenCLArrayContext`. Extends it
-    to understand :mod:`grudge`-specific transform metadata. (Of which there isn't
-    any, for now.)
+    to understand :mod:`grudge`-specific transform metadata.
     """
     def __init__(self, queue: "pyopencl.CommandQueue",
             allocator: Optional["pyopencl.tools.AllocatorBase"] = None,
@@ -138,6 +138,30 @@ class PyOpenCLArrayContext(_PyOpenCLArrayContextBase):
         super().__init__(queue, allocator,
                          wait_event_queue_length, force_device_scalars)
 
+    def transform_loopy_program(self, t_unit):
+        knl = t_unit.default_entrypoint
+
+        # {{{ process tensor product specific metadata
+
+        if knl.tags_of_type(OutputIsTensorProductDOFArrayOrdered):
+            new_args = []
+            for arg in knl.args:
+                if arg.is_output:
+                    arg = arg.copy(dim_tags=(
+                        f"N{len(arg.shape)-1},"
+                        + ",".join(f"N{i}"
+                                   for i in range(len(arg.shape)-1))
+                        ))
+
+                new_args.append(arg)
+
+            knl = knl.copy(args=new_args)
+            t_unit = t_unit.with_kernel(knl)
+
+        # }}}
+
+        return super().transform_loopy_program(t_unit)
+
 # }}}
 
 
@@ -145,8 +169,7 @@ class PyOpenCLArrayContext(_PyOpenCLArrayContextBase):
 
 class PytatoPyOpenCLArrayContext(_PytatoPyOpenCLArrayContextBase):
     """Inherits from :class:`meshmode.array_context.PytatoPyOpenCLArrayContext`.
-    Extends it to understand :mod:`grudge`-specific transform metadata. (Of
-    which there isn't any, for now.)
+    Extends it to understand :mod:`grudge`-specific transform metadata.
     """
     def __init__(self, queue, allocator=None,
             *,
@@ -167,6 +190,29 @@ class PytatoPyOpenCLArrayContext(_PytatoPyOpenCLArrayContextBase):
 
         super().__init__(queue, allocator,
                 compile_trace_callback=compile_trace_callback)
+
+    def transform_loopy_program(self, t_unit):
+        knl = t_unit.default_entrypoint
+
+        # {{{ process tensor product specific metadata
+
+        if knl.tags_of_type(OutputIsTensorProductDOFArrayOrdered):
+            new_args = []
+            for arg in knl.args:
+                if arg.is_output:
+                    arg = arg.copy(dim_tags=(
+                        f"N{len(arg.shape)-1},"
+                        + ",".join(f"N{i}"
+                                   for i in range(len(arg.shape)-1))
+                        ))
+
+                new_args.append(arg)
+
+            knl = knl.copy(args=new_args)
+
+        # }}}
+
+        return super().transform_loopy_program(t_unit)
 
 # }}}
 
@@ -242,19 +288,36 @@ class _DistributedLazilyPyOpenCLCompilingFunctionCaller(
         self.actx._compile_trace_callback(self.f, "pre_find_distributed_partition",
                 dict_of_named_arrays)
 
-        distributed_partition = pt.find_distributed_partition(
-            # pylint-ignore-reason:
-            # '_BasePytatoArrayContext' has no
-            # 'mpi_communicator' member
-            # pylint: disable=no-member
-            self.actx.mpi_communicator, dict_of_named_arrays)
+#        # https://github.com/inducer/pytato/pull/393 changes the function signature
+#        try:
+#            # pylint: disable=too-many-function-args
+#            distributed_partition = pt.find_distributed_partition(
+#                # pylint-ignore-reason:
+#                # '_BasePytatoArrayContext' has no
+#                # 'mpi_communicator' member
+#                # pylint: disable=no-member
+#                self.actx.mpi_communicator, dict_of_named_arrays)
+#        except TypeError as e:
+#            if "find_distributed_partition() takes 1 positional" in str(e):
+#                distributed_partition = pt.find_distributed_partition(
+#                    dict_of_named_arrays)
+#            else:
+#                raise
 
-        if __debug__:
-            # pylint-ignore-reason:
-            # '_BasePytatoArrayContext' has no 'mpi_communicator' member
-            pt.verify_distributed_partition(
-                self.actx.mpi_communicator,  # pylint: disable=no-member
-                distributed_partition)
+        with ProcessLogger(logger, "pt.find_distributed_partition"):
+            distributed_partition = pt.find_distributed_partition(
+                # pylint-ignore-reason:
+                # '_BasePytatoArrayContext' has no
+                # 'mpi_communicator' member
+                # pylint: disable=no-member
+                self.actx.mpi_communicator, dict_of_named_arrays)
+
+            if __debug__:
+                # pylint-ignore-reason:
+                # '_BasePytatoArrayContext' has no 'mpi_communicator' member
+                pt.verify_distributed_partition(
+                    self.actx.mpi_communicator,  # pylint: disable=no-member
+                    distributed_partition)
 
         self.actx._compile_trace_callback(self.f, "post_find_distributed_partition",
                 distributed_partition)
@@ -395,9 +458,11 @@ class _DistributedCompiledFunction:
 
 class MPIPytatoArrayContextBase(MPIBasedArrayContext):
     def __init__(
-            self, mpi_communicator, queue, *, mpi_base_tag, allocator=None,
-            compile_trace_callback: Optional[Callable[[Any, str, Any], None]]
-            = None) -> None:
+            self, mpi_communicator, queue, *,
+            mpi_base_tag, allocator=None,
+            compile_trace_callback: Optional[Callable[[Any, str, Any], None]] = None,
+            use_axis_tag_inference_fallback: bool = False,
+            use_einsum_inference_fallback: bool = False) -> None:
         """
         :arg compile_trace_callback: A function of three arguments
             *(what, stage, ir)*, where *what* identifies the object
@@ -412,7 +477,9 @@ class MPIPytatoArrayContextBase(MPIBasedArrayContext):
                  "to reduce device allocations)", stacklevel=2)
 
         super().__init__(queue, allocator,
-                compile_trace_callback=compile_trace_callback)
+                compile_trace_callback=compile_trace_callback,
+                use_axis_tag_inference_fallback=use_axis_tag_inference_fallback,
+                use_einsum_inference_fallback=use_einsum_inference_fallback)
 
         self.mpi_communicator = mpi_communicator
         self.mpi_base_tag = mpi_base_tag
@@ -427,7 +494,9 @@ class MPIPytatoArrayContextBase(MPIBasedArrayContext):
         # pylint: disable=no-member
         return type(self)(self.mpi_communicator, self.queue,
                 mpi_base_tag=self.mpi_base_tag,
-                allocator=self.allocator)
+                allocator=self.allocator,
+                use_axis_tag_inference_fallback=self.use_axis_tag_inference_fallback,
+                use_einsum_inference_fallback=self.use_einsum_inference_fallback)
 
 # }}}
 
@@ -611,6 +680,56 @@ def get_reasonable_array_context_class(
                 # eager is always device-parallel:
                 (_HAVE_SINGLE_GRID_WORK_BALANCING or _HAVE_FUSION_ACTX or not lazy))
     return actx_class
+
+# }}}
+
+# {{{ distributed + numpy
+
+try:
+    from arraycontext import NumpyArrayContext
+
+    class MPINumpyArrayContext(NumpyArrayContext, MPIBasedArrayContext):
+        """An array context for using distributed computation with :mod:`numpy`
+        eager evaluation.
+        .. autofunction:: __init__
+        """
+
+        def __init__(self, mpi_communicator) -> None:
+            super().__init__()
+            self.mpi_communicator = mpi_communicator
+
+        def clone(self):
+            return type(self)(self.mpi_communicator)
+
+except ImportError:
+    print("Failed to import numpy array context.")
+    pass
+
+# }}}
+
+
+# {{{ tensor product-specific machinery
+
+class OutputIsTensorProductDOFArrayOrdered(Tag):
+    """Signify that the strides will not be of order "C" or "F".
+
+    The strides for the arrays containing tensor product element data are of the
+    form (slow, fastest, faster, fast). These strides are not "C" or "F" order.
+    Hence, this specialized array context takes care of specifying the
+    particular strides required.
+    """
+    pass
+
+
+class MassMatrix1d(Tag):
+    """Used in DAG transformation to realize algebraic simplification of 1D
+    inverse mass operator times mass operator.
+    """
+    pass
+
+class InverseMassMatrix1d(Tag):
+    """See MassMatrix1d.
+    """
 
 # }}}
 
