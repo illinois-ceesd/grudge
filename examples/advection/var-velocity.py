@@ -96,7 +96,7 @@ class Plotter:
 
 
 def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
-        flux_type="upwind"):
+         flux_type="upwind", tpe=False, quad_order=7):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
     actx = PyOpenCLArrayContext(
@@ -113,36 +113,36 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
     npoints = 25
 
     # final time
-    final_time = 1
-
-    if use_quad:
-        qtag = dof_desc.DISCR_TAG_QUAD
-    else:
-        qtag = None
-
+    final_time = 2
+    qtag = dof_desc.DISCR_TAG_QUAD if use_quad else None
+    
     # }}}
 
     # {{{ discretization
 
     from meshmode.mesh.generation import generate_regular_rect_mesh
+    from meshmode.mesh import TensorProductElementGroup
+    group_cls = TensorProductElementGroup if tpe else None
     mesh = generate_regular_rect_mesh(
             a=(0,)*dim, b=(d,)*dim,
             npoints_per_axis=(npoints,)*dim,
-            order=order)
+            order=order, group_cls=group_cls)
 
-    from meshmode.discretization.poly_element import QuadratureSimplexGroupFactory
+    from meshmode.discretization.poly_element import (
+        QuadratureGroupFactory,
+        InterpolatoryEdgeClusteredGroupFactory
+    )
 
-    if use_quad:
-        discr_tag_to_group_factory = {
-            qtag: QuadratureSimplexGroupFactory(order=4*order)
-        }
-    else:
-        discr_tag_to_group_factory = {}
+    discr_tag_to_group_factory = {
+        dof_desc.DISCR_TAG_BASE:
+        InterpolatoryEdgeClusteredGroupFactory(order),
+        dof_desc.DISCR_TAG_QUAD:
+        QuadratureGroupFactory(quad_order)
+    }
 
     from grudge.discretization import make_discretization_collection
-
     dcoll = make_discretization_collection(
-        actx, mesh, order=order,
+        actx, mesh,
         discr_tag_to_group_factory=discr_tag_to_group_factory
     )
 
@@ -151,6 +151,17 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
     # {{{ advection operator
 
     # gaussian parameters
+
+    # Mengaldo test case
+    alpha = 41.
+    xc = -.3
+    yc = 0
+
+    def poly_vel_initializer(xyz_vec, t=0):
+        x = xyz_vec[0]
+        y = xyz_vec[1]
+        actx = x.array_context
+        return actx.np.exp(-alpha*((x-xc)**2 + (y-yc)**2))
 
     def f_halfcircle(x):
         source_center = np.array([d/2, d/2, d/2])[:dim]
@@ -186,12 +197,16 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
         flux_type=flux_type
     )
 
-    u = f_halfcircle(x)
+    # u = f_halfcircle(x)
+    u = poly_vel_initializer(x)
 
     def rhs(t, u):
         return adv_operator.operator(t, u)
 
-    dt = actx.to_numpy(adv_operator.estimate_rk4_timestep(actx, dcoll, fields=u))
+    fudge_fac = 0.7 if tpe else .5
+    dt = \
+        fudge_fac * actx.to_numpy(
+            adv_operator.estimate_rk4_timestep(actx, dcoll, fields=u))
 
     logger.info("Timestep size: %g", dt)
 
@@ -229,17 +244,24 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dim", default=2, type=int)
     parser.add_argument("--order", default=4, type=int)
+    parser.add_argument("--tpe", action="store_true")
     parser.add_argument("--use-quad", action="store_true")
+    parser.add_argument("--quad-order", type=int)
     parser.add_argument("--visualize", action="store_true")
     parser.add_argument("--flux", default="upwind",
             help="'central' or 'upwind'. Run with central to observe aliasing "
             "instability. Add --use-quad to fix that instability.")
     args = parser.parse_args()
 
+    quad_order = args.quad_order
+    order = args.order
+    if quad_order is None:
+        quad_order = order if args.tpe else order + 3
+
     logging.basicConfig(level=logging.INFO)
     main(cl.create_some_context,
          dim=args.dim,
-         order=args.order,
+         order=order, quad_order=quad_order,
          use_quad=args.use_quad,
          visualize=args.visualize,
-         flux_type=args.flux)
+         flux_type=args.flux, tpe=args.tpe)

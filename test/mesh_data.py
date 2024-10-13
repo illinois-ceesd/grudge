@@ -112,7 +112,7 @@ class SpheroidMeshBuilder(MeshBuilder):
 
 
 class _BoxMeshBuilderBase(MeshBuilder):
-    resolutions: ClassVar[Sequence[Hashable]] = [4, 8, 16]
+    resolutions: ClassVar[Sequence[Hashable]] = [3, 5, 9, 12]
     mesh_order = 1
     group_cls = None
     a = (-0.5, -0.5, -0.5)

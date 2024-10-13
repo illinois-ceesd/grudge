@@ -29,6 +29,7 @@ import mesh_data
 import numpy as np
 import numpy.linalg as la
 import pytest
+from sympy import cos, acos, symbols, integrate, simplify
 
 import meshmode.mesh.generation as mgen
 from arraycontext import pytest_generate_tests_for_array_contexts
@@ -79,13 +80,16 @@ def test_mass_mat_trig(actx_factory, tpe, ambient_dim, use_overint):
     else:
         discr_order = None
         discr_tag_to_group_factory = {
-            dof_desc.DISCR_TAG_BASE: InterpolatoryEdgeClusteredGroupFactory(order),
-            dof_desc.DISCR_TAG_QUAD: QuadratureGroupFactory(order=2*order)
+            dof_desc.DISCR_TAG_BASE:
+            InterpolatoryEdgeClusteredGroupFactory(order),
+            dof_desc.DISCR_TAG_QUAD:
+            QuadratureGroupFactory(order=2*order)
         }
 
     mesh = mgen.generate_regular_rect_mesh(
             a=(a,)*ambient_dim, b=(b,)*ambient_dim,
             nelements_per_axis=(nel_1d,)*ambient_dim, order=1)
+
     dcoll = make_discretization_collection(
         actx, mesh, order=discr_order,
         discr_tag_to_group_factory=discr_tag_to_group_factory
@@ -299,7 +303,8 @@ def test_correctness_of_quadrature(actx_factory, name):
                     discr_tag_to_group_factory={
                         DISCR_TAG_BASE:
                         InterpolatoryEdgeClusteredGroupFactory(discr_order),
-                        DISCR_TAG_QUAD: QuadratureGroupFactory(discr_order)
+                        DISCR_TAG_QUAD:
+                        QuadratureGroupFactory(discr_order)
                     })
                 vol_discr_base = dcoll.discr_from_dd(vol_dd_base)
                 vol_discr_quad = dcoll.discr_from_dd(vol_dd_quad)
@@ -388,6 +393,382 @@ def test_correctness_of_quadrature(actx_factory, name):
 
         print("-=-=-=-=-=-=-=-=-=-=-=-=-=--=-=-=-")
     print("==============================")
+
+
+def _sym_chebyshev_polynomial(n, x):
+    return cos(n * acos(x))
+
+
+# array context version
+def _chebyshev_polynomial(n, x):
+    actx = x.array_context
+    return actx.np.cos(float(n) * actx.np.arccos(x))
+
+
+# Integrate Chebyshev poly using sympy
+def _analytic_chebyshev_integral(n, domain=None):
+    if domain is None:
+        domain = [0, 1]
+
+    x = symbols('x')
+    chebyshev_poly = _sym_chebyshev_polynomial(n, x)
+    exact_integral = integrate(chebyshev_poly, (x, domain[0], domain[1]))
+
+    return simplify(exact_integral)
+
+
+@pytest.mark.parametrize("name", [
+     "interval", "box2d", "box2d-tpe", "box3d", "box3d-tpe"])
+# @pytest.mark.parametrize("name", ["box2d",])
+# @pytest.mark.parametrize("discr_order", [1, 2, 3, 4, 5])
+def test_correctness_of_quadrature2(actx_factory, name):
+    from grudge.dof_desc import DISCR_TAG_BASE, DISCR_TAG_QUAD, as_dofdesc
+    actx = actx_factory()
+    vol_dd_base = as_dofdesc(dof_desc.DTAG_VOLUME_ALL)
+    vol_dd_quad = vol_dd_base.with_discr_tag(DISCR_TAG_QUAD)
+
+    # {{{ cases
+
+    switch_tol = 1e-4
+    exact_tol = 1e-13
+    # discr_order = 1
+    dim = None
+    mesh_order = 1
+
+    tpe = name.endswith("-tpe")
+    if name.startswith("box2d"):
+        builder = mesh_data.BoxMeshBuilder2D(tpe=tpe,
+                                             a=(0, 0),
+                                             b=(1.0, 1.0))
+        dim = 2
+    elif name.startswith("box3d"):
+        builder = mesh_data.BoxMeshBuilder3D(tpe=tpe,
+                                             a=(0, 0, 0),
+                                             b=(1.0, 1.0, 1.0))
+        dim = 3
+    elif name == "interval":
+        builder = mesh_data.BoxMeshBuilder1D(tpe=False, a=(0.0,),
+                                             b=(1.0,))
+        dim = 1.0
+    else:
+        raise ValueError(f"unknown geometry name: {name}")
+    exact_volume = 1.0
+    elem_type = "line"
+    if dim > 1:
+        elem_type = "quad" if tpe else "tri"
+    if dim > 2:
+        elem_type = "hex" if tpe else "tet"
+
+    print(f"\n## Domain: {name} ({dim}d), {exact_volume=},"
+          f"Element type: {elem_type}\n")
+    # print("="*75)
+
+    # }}}
+
+    # {{{ convergence
+    bresult = {}
+    qresult = {}
+    base_rule_name = ""
+    quad_rule_name = ""
+    from pytools.convergence import EOCRecorder
+    for discr_order in range(1, 8):
+        # print(f"   {discr_order=}")
+        # print("   --------------------")
+        # report_discr = True
+        ndofs_base = 0
+        ndofs_quad = 0
+        dofs_per_el_base = 0
+        dofs_per_el_quad = 0
+        max_order_base = 0
+        min_order_base = 10000
+        max_order_quad = 0
+        min_order_quad = 10000
+        order_search_done = False
+        base_order_found = False
+        quad_order_found = False
+        field_order = 0
+        # for field_order in range(1, max(2*discr_order+2, 8)):
+        while not order_search_done:
+            field_order = field_order + 1
+            # report_field_order = True
+            eoc_base = EOCRecorder()
+            eoc_quad = EOCRecorder()
+            for resolution in builder.resolutions:
+                mesh = builder.get_mesh(resolution, mesh_order)
+                dcoll = make_discretization_collection(
+                    actx, mesh,
+                    discr_tag_to_group_factory={
+                        DISCR_TAG_BASE:
+                        InterpolatoryEdgeClusteredGroupFactory(discr_order),
+                        DISCR_TAG_QUAD:
+                        QuadratureGroupFactory(discr_order)
+                    })
+                vol_discr_base = dcoll.discr_from_dd(vol_dd_base)
+                vol_discr_quad = dcoll.discr_from_dd(vol_dd_quad)
+                nelem = vol_discr_base.mesh.nelements
+                ndofs_base = vol_discr_base.ndofs
+                ndofs_quad = vol_discr_quad.ndofs
+                dofs_per_el_base = ndofs_base/nelem
+                dofs_per_el_quad = ndofs_quad/nelem
+                for grp in vol_discr_base.groups:
+                    qr = grp.quadrature_rule()
+                    base_rule_name = type(qr).__name__
+                    xact_to_base = qr._exact_to
+                for grp in vol_discr_quad.groups:
+                    qr = grp.quadrature_rule()
+                    quad_rule_name = type(qr).__name__
+                    xact_to_quad = qr._exact_to
+                # if report_discr:
+                #    # print(f"Num {elem_type} elements: {nelem}.")
+                #    print(f"Base Rule: {base_rule_name}\n"
+                #          f" - Num nodes: {dofs_per_el_base}\n"
+                #          f" - Exact to: {xact_to_base}")
+                #    print(f"Quad Rule: {quad_rule_name}\n"
+                #          f" - Num nodes: {dofs_per_el_quad}\n"
+                #          f" - Exact to: {xact_to_quad}")
+                #    report_discr = False
+                # if report_field_order:
+                #     print(f"      - {field_order=}")
+                #     print("      - - - - - - - - - -")
+                #    report_field_order = False
+                nodes_base = actx.thaw(vol_discr_base.nodes())
+                nodes_quad = actx.thaw(vol_discr_quad.nodes())
+                one_base = 0*nodes_base[0] + 1.
+                zero_base = 0*nodes_base[0] + 0.
+                field_base = 0
+                field_quad = 0
+                exact_integral = 0
+                for i in range(int(dim)):
+                    x_base = nodes_base[i]
+                    x_base = actx.np.where(x_base > one_base, one_base,
+                                           x_base)
+                    x_base = actx.np.where(x_base < zero_base, zero_base,
+                                           x_base)
+                    x_quad = nodes_quad[i]
+                    # print(f"{actx.to_numpy(x_base)=}")
+                    field_base = \
+                        field_base + _chebyshev_polynomial(field_order, x_base)
+                    field_quad = \
+                        field_quad + _chebyshev_polynomial(field_order, x_quad)
+                    exact_integral = \
+                        (exact_integral
+                         + _analytic_chebyshev_integral(field_order))
+                # print(f"{actx.to_numpy(field_base)=}")
+                # print(f"{actx.to_numpy(field_quad)=}")
+                # print(f"{exact_integral=}")
+                integral_base =  \
+                    actx.to_numpy(op.integral(dcoll, vol_dd_base, field_base))
+                integral_quad =  \
+                    actx.to_numpy(op.integral(dcoll, vol_dd_quad, field_quad))
+                err_base = \
+                    abs(integral_base - exact_integral)/abs(exact_integral)
+                err_quad = \
+                    abs(integral_quad - exact_integral)/abs(exact_integral)
+
+                # print(f"{err_base=}, {err_quad=}")
+
+                if field_order <= discr_order:
+                    assert err_base < exact_tol
+                    assert err_quad < exact_tol
+
+                # compute max element size
+                from grudge.dt_utils import h_max_from_volume
+                h_max = actx.to_numpy(h_max_from_volume(dcoll))
+                # print(f"{h_max=}")
+
+                eoc_base.add_data_point(float(h_max), float(err_base))
+                eoc_quad.add_data_point(float(h_max), float(err_quad))
+
+            # logger.info("volume error(base)\n%s", str(eoc_base))
+            # logger.info("volume error(quad)\n%s", str(eoc_quad))
+
+            # Sanity check here: *must* be exact if discr_order is sufficient
+            if discr_order >= field_order:
+                assert eoc_base.max_error() < exact_tol
+                assert eoc_quad.max_error() < exact_tol
+            else:
+                if eoc_base.max_error() > switch_tol:  # *can* be exact(ish) otherwise
+                    # print("---- base -----")
+                    # print(f"{eoc_base.pretty_print()}")
+                    base_order = eoc_base.order_estimate()
+                    max_order_base = max(max_order_base, base_order)
+                    min_order_base = min(min_order_base, base_order)
+                    base_order_found = True
+                    assert base_order > xact_to_base
+                if eoc_quad.max_error() > switch_tol:
+                    # print("---- quad -----")
+                    # print(f"{eoc_quad.pretty_print()}")
+                    quad_order = eoc_quad.order_estimate()
+                    max_order_quad = max(max_order_quad, quad_order)
+                    min_order_quad = min(min_order_quad, quad_order)
+                    quad_order_found = True
+                    assert eoc_quad.order_estimate() > xact_to_quad
+            order_search_done = quad_order_found and base_order_found
+
+        bresult[discr_order] = [dofs_per_el_base, xact_to_base,
+                                min_order_base, max_order_base]
+        qresult[discr_order] = [dofs_per_el_quad, xact_to_quad,
+                                min_order_quad, max_order_quad]
+
+        # print(f"base[{dofs_per_el_base}]({min_order_base, max_order_base}),\n"
+        #       f"quad[{dofs_per_el_quad}]({min_order_quad, max_order_quad})")
+
+        # print("-=-=-=-=-=-=-=-=-=-=-=-=-=--=-=-=-")
+    print(f"### BaseDiscr Rule Name: {base_rule_name}")
+    print("| Basis degree (p) | Num quadrature nodes | Exact to | Order of error term  ")
+    print("| ---------------- | -------------------- | -------- | ------------------- |")
+    for p, data in bresult.items():
+        print(f"|     {p}       |    {data[0]}     | {data[1]} |   {data[3]}   |")
+    print("\n\n")
+    print(f"### QuadDiscr Rule Name: {quad_rule_name}")
+    print("| Basis degree (p) | Num quadrature nodes | Exact to | Order of error term  ")
+    print("| ---------------- | -------------------- | -------- | ------------------- |")
+    for p, data in qresult.items():
+        print(f"|     {p}       |    {data[0]}     | {data[1]} |   {data[3]}   |")
+    print("")
+    print("-"*75)
+
+
+@pytest.mark.parametrize("name", [
+    "interval", "box2d", "box2d-tpe", "box3d", "box3d-tpe"
+    ])
+# @pytest.mark.parametrize("discr_order", [1, 2, 3, 4, 5])
+def test_order_of_quadrature(actx_factory, name):
+    from grudge.dof_desc import DISCR_TAG_BASE, DISCR_TAG_QUAD, as_dofdesc
+    actx = actx_factory()
+    vol_dd_base = as_dofdesc(dof_desc.DTAG_VOLUME_ALL)
+    vol_dd_quad = vol_dd_base.with_discr_tag(DISCR_TAG_QUAD)
+
+    # {{{ cases
+
+    tol = 5e-13
+    # discr_order = 1
+    dim = None
+    mesh_order = 1
+
+    tpe = name.endswith("-tpe")
+    if name.startswith("box2d"):
+        builder = mesh_data.BoxMeshBuilder2D(tpe=tpe,
+                                             a=(0, 0),
+                                             b=(2.0*np.pi, 2.0*np.pi))
+        dim = 2
+    elif name.startswith("box3d"):
+        builder = mesh_data.BoxMeshBuilder3D(tpe=tpe,
+                                             a=(0, 0, 0),
+                                             b=(2.0*np.pi, 2.0*np.pi,
+                                                2.0*np.pi))
+        dim = 3
+    elif name == "interval":
+        builder = mesh_data.BoxMeshBuilder1D(tpe=False, a=(0.0,),
+                                             b=(2.0*np.pi,))
+        dim = 1.0
+    else:
+        raise ValueError(f"unknown geometry name: {name}")
+    exact_volume = (2.0*np.pi)**dim
+    print(f"Domain: {name} ({dim}d), {exact_volume=}")
+    print(f"======================================================")
+
+    # }}}
+
+    # {{{ convergence
+
+    from pytools.convergence import EOCRecorder
+    for discr_order in range(1, 10):
+        print(f"   {discr_order=}")
+        print("   --------------------")
+        report_discr = True
+        eoc_base = EOCRecorder()
+        eoc_quad = EOCRecorder()
+        for resolution in builder.resolutions:
+            mesh = builder.get_mesh(resolution, mesh_order)
+
+            dcoll = make_discretization_collection(
+                actx, mesh,
+                discr_tag_to_group_factory={
+                    DISCR_TAG_BASE:
+                    InterpolatoryEdgeClusteredGroupFactory(discr_order),
+                    DISCR_TAG_QUAD: QuadratureGroupFactory(discr_order)
+                })
+
+            vol_discr_base = dcoll.discr_from_dd(vol_dd_base)
+            vol_discr_quad = dcoll.discr_from_dd(vol_dd_quad)
+            if report_discr:
+                nelem = vol_discr_base.mesh.nelements
+                ndofs_base = vol_discr_base.ndofs
+                ndofs_quad = vol_discr_quad.ndofs
+                dofs_per_el_base = ndofs_base/nelem
+                dofs_per_el_quad = ndofs_quad/nelem
+                print(f"   - {dofs_per_el_base=}, {dofs_per_el_quad=}")
+                report_discr = False
+            nodes_base = actx.thaw(vol_discr_base.nodes())
+            nodes_quad = actx.thaw(vol_discr_quad.nodes())
+            ones_base = 0*nodes_base[0] + 1
+            ones_quad = 0*nodes_quad[0] + 1
+
+            approx_vol_base = \
+                actx.to_numpy(op.integral(dcoll, vol_dd_base, ones_base))
+            approx_vol_quad = \
+                actx.to_numpy(op.integral(dcoll, vol_dd_quad, ones_quad))
+            err_vol_base = abs(approx_vol_base - exact_volume)/exact_volume
+            err_vol_quad = abs(approx_vol_quad - exact_volume)/exact_volume
+
+            logger.info(
+                f"Name: {name} ({dim}d)\n"
+                f"Exact volume: {exact_volume}\n"
+                f"volume base: got {approx_vol_base:.12e}\n"  # noqa: G004
+                f"volume quad: got {approx_vol_quad:.12e}\n")  # noqa: G004
+
+            # Quadrature should get exact volume for all discr (p >= 1)
+            assert err_vol_base < tol
+            assert err_vol_quad < tol
+
+            x = nodes_base[0]
+            field_base = actx.np.sin(x)*actx.np.sin(x)
+            x = nodes_quad[0]
+            field_quad = actx.np.sin(x)*actx.np.sin(x)
+            if dim > 1:
+                y = nodes_base[1]
+                field_base = field_base * actx.np.cos(y) * actx.np.cos(y)
+                y = nodes_quad[1]
+                field_quad = field_quad * actx.np.cos(y) * actx.np.cos(y)
+            if dim > 2:
+                z = nodes_base[2]
+                field_base = field_base * actx.np.cos(z) * actx.np.cos(z)
+                z = nodes_quad[2]
+                field_quad = field_quad * actx.np.cos(z) * actx.np.cos(z)
+
+            integral_base =  \
+                actx.to_numpy(op.integral(dcoll, vol_dd_base, field_base))
+            integral_quad =  \
+                actx.to_numpy(op.integral(dcoll, vol_dd_quad, field_quad))
+
+            exact_integral = np.pi**dim
+            err_base = abs(integral_base-exact_integral)/exact_integral
+            err_quad = abs(integral_quad-exact_integral)/exact_integral
+
+            # compute max element size
+            from grudge.dt_utils import h_max_from_volume
+            h_max = h_max_from_volume(dcoll)
+
+            eoc_base.add_data_point(actx.to_numpy(h_max), err_base)
+            eoc_quad.add_data_point(actx.to_numpy(h_max), err_quad)
+
+        logger.info("volume error(base)\n%s", str(eoc_base))
+        logger.info("volume error(quad)\n%s", str(eoc_quad))
+        print("---- base -----")
+        print(f"{eoc_base.pretty_print()}")
+        print("---- quad -----")
+        print(f"{eoc_quad.pretty_print()}")
+
+        # Sanity check here: *must* be exact if discr_order is sufficient
+        assert (eoc_base.order_estimate() > discr_order
+                or eoc_base.max_error() < tol)
+        assert (eoc_quad.order_estimate() > discr_order
+                or eoc_quad.max_error() < tol)
+
+        print("-=-=-=-=-=-=-=-=-=-=-=-=-=--=-=-=-")
+    print("==============================")
+
 # }}}
 
 
