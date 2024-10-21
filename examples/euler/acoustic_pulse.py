@@ -155,6 +155,7 @@ def run_acoustic_pulse(actx,
         b=(box_ur,)*dim,
         nelements_per_axis=(resolution,)*dim,
         group_cls=group_cls)
+    quad_order = order if tpe else 2*order
 
     from meshmode.discretization.poly_element import (
         QuadratureSimplexGroupFactory,
@@ -186,7 +187,7 @@ def run_acoustic_pulse(actx,
         actx, mesh,
         discr_tag_to_group_factory={
             DISCR_TAG_BASE: InterpolatoryEdgeClusteredGroupFactory(order),
-            DISCR_TAG_QUAD: QuadratureGroupFactory(2*order)
+            DISCR_TAG_QUAD: QuadratureGroupFactory(quad_order)
         }
     )
 

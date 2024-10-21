@@ -58,7 +58,8 @@ from arraycontext import (
     dataclass_array_container,
     with_container_arithmetic,
     map_array_container, thaw,
-    outer
+    outer,
+    get_container_context_recursively_opt
 )
 from meshmode.dof_array import DOFArray
 from pytools.obj_array import make_obj_array
@@ -88,6 +89,11 @@ class ConservedEulerField:
     @property
     def dim(self):
         return len(self.momentum)
+
+    @property
+    def array_context(self):
+        """Return an array context for the :class:`ConservedVars` object."""
+        return get_container_context_recursively_opt(self.mass)
 
 # }}}
 
@@ -401,13 +407,13 @@ class EulerOperator(HyperbolicOperator):
         # Compute interior interface fluxes
         interface_fluxes = (
             sum(
-                op.project(dcoll, qtpair.dd, dd_face_quad,
+                op.project(dcoll, tpair.dd, dd_face_quad,
                            euler_numerical_flux(
                                actx, dcoll,
                                op.tracepair_with_discr_tag(dcoll, qtag, tpair),
                                gamma=gamma,
-                               lf_stabilization=self.lf_stabilization
-                           ) for tpair in op.interior_trace_pairs(dcoll, q))
+                               dissipation=self.lf_stabilization)
+                           ) for tpair in op.interior_trace_pairs(dcoll, q)
             )
         )
 
@@ -429,7 +435,7 @@ class EulerOperator(HyperbolicOperator):
                             t=t
                         ),
                         gamma=gamma,
-                        lf_stabilization=self.lf_stabilization
+                        dissipation=self.lf_stabilization
                     )
                 )
                 interface_fluxes = interface_fluxes + bc_flux

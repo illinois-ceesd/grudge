@@ -96,7 +96,12 @@ class Plotter:
 
 
 def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
-         flux_type="upwind", tpe=False, quad_order=7):
+         flux_type="upwind", tpe=False, quad_order=None, t_final=None,
+         nperiods=1., period=2., v_cycle=False, warp=1.0, nel1d=25):
+
+    if quad_order is None:
+        quad_order = order if tpe else 2*order + 1
+
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
     actx = PyOpenCLArrayContext(
@@ -109,13 +114,15 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
 
     # domain [0, d]^dim
     d = 1.0
+    a = -1.0
+    l = d - a
     # number of points in each dimension
-    npoints = 25
+    npoints = nel1d
 
     # final time
-    final_time = 2
+    final_time = t_final or nperiods * period
     qtag = dof_desc.DISCR_TAG_QUAD if use_quad else None
-    
+
     # }}}
 
     # {{{ discretization
@@ -124,7 +131,7 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
     from meshmode.mesh import TensorProductElementGroup
     group_cls = TensorProductElementGroup if tpe else None
     mesh = generate_regular_rect_mesh(
-            a=(0,)*dim, b=(d,)*dim,
+            a=(a,)*dim, b=(d,)*dim,
             npoints_per_axis=(npoints,)*dim,
             order=order, group_cls=group_cls)
 
@@ -154,8 +161,8 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
 
     # Mengaldo test case
     alpha = 41.
-    xc = -.3
-    yc = 0
+    xc = -0.3
+    yc = 0.0
 
     def poly_vel_initializer(xyz_vec, t=0):
         x = xyz_vec[0]
@@ -179,22 +186,32 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
     x = actx.thaw(dcoll.nodes())
 
     # velocity field
-    if dim == 1:
-        c = x
-    else:
-        # solid body rotation
-        c = flat_obj_array(
-            np.pi * (d/2 - x[1]),
-            np.pi * (x[0] - d/2),
-            0
-        )[:dim]
+    def vel_func(t):
+        g_t = 1.
+        if v_cycle:
+            g_t = np.cos(np.pi * t / period)
+
+        if dim == 1:
+            c = g_t * x**warp
+        else:
+            # solid body rotation
+            c = flat_obj_array(
+                np.pi * g_t * (0. - x[1])**warp,
+                np.pi * g_t * (x[0] - 0.)**warp,
+                0
+            )[:dim]
+
+        return c
+
+    c = vel_func(0)
 
     adv_operator = VariableCoefficientAdvectionOperator(
         dcoll,
         c,
         inflow_u=lambda t: zero_inflow_bc(BTAG_ALL, t),
         quad_tag=qtag,
-        flux_type=flux_type
+        flux_type=flux_type,
+        vel_func=vel_func
     )
 
     # u = f_halfcircle(x)
@@ -207,8 +224,16 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
     dt = \
         fudge_fac * actx.to_numpy(
             adv_operator.estimate_rk4_timestep(actx, dcoll, fields=u))
+    # dt = dt / 20.
 
     logger.info("Timestep size: %g", dt)
+    u_init = actx.to_numpy(op.norm(dcoll, u, 2))
+    logger.info("Initial u: %g", u_init)
+    u_bound = 100.0 * u_init
+    logger.info("Final time: %g", final_time)
+    logger.info("Period: %g", period)
+    logger.info("Nperiods: %g", nperiods)
+    logger.info("Actual nperiods: %g", final_time / period)
 
     # }}}
 
@@ -220,10 +245,12 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
             ylim=[-0.1, 1.1])
 
     step = 0
+    save_event = None
     for event in dt_stepper.run(t_end=final_time):
         if not isinstance(event, dt_stepper.StateComputed):
             continue
 
+        save_event = event
         if step % 10 == 0:
             norm_u = actx.to_numpy(op.norm(dcoll, event.state_component, 2))
             plot(event, f"fld-var-velocity-{step:04d}")
@@ -231,9 +258,13 @@ def main(ctx_factory, dim=2, order=4, use_quad=False, visualize=False,
             logger.info("[%04d] t = %.5f |u| = %.5e", step, event.t, norm_u)
             # NOTE: These are here to ensure the solution is bounded for the
             # time interval specified
-            assert norm_u < 1
+            assert norm_u < u_bound
 
         step += 1
+
+    plot(save_event, f"fld-var-velocity-{step:04d}")
+    norm_err = actx.to_numpy(op.norm(dcoll, save_event.state_component - u, 2))
+    logger.info("Final error: %g", norm_err)
 
     # }}}
 
@@ -244,10 +275,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dim", default=2, type=int)
     parser.add_argument("--order", default=4, type=int)
+    parser.add_argument("--warp", default=1, type=float)
+    parser.add_argument("--tfinal", type=float)
+    parser.add_argument("--nperiods", type=float, default=1.)
+    parser.add_argument("--period", type=float, default=2.)
     parser.add_argument("--tpe", action="store_true")
     parser.add_argument("--use-quad", action="store_true")
     parser.add_argument("--quad-order", type=int)
     parser.add_argument("--visualize", action="store_true")
+    parser.add_argument("--agitator", action="store_true")
+    parser.add_argument("--nel1d", type=int, default=25)
     parser.add_argument("--flux", default="upwind",
             help="'central' or 'upwind'. Run with central to observe aliasing "
             "instability. Add --use-quad to fix that instability.")
@@ -259,9 +296,9 @@ if __name__ == "__main__":
         quad_order = order if args.tpe else order + 3
 
     logging.basicConfig(level=logging.INFO)
-    main(cl.create_some_context,
-         dim=args.dim,
-         order=order, quad_order=quad_order,
-         use_quad=args.use_quad,
-         visualize=args.visualize,
-         flux_type=args.flux, tpe=args.tpe)
+    main(cl.create_some_context, v_cycle=args.agitator,
+         dim=args.dim, nperiods=args.nperiods,
+         order=order, quad_order=quad_order, nel1d=args.nel1d,
+         use_quad=args.use_quad, period=args.period,
+         visualize=args.visualize, t_final=args.tfinal,
+         flux_type=args.flux, tpe=args.tpe, warp=args.warp)

@@ -209,7 +209,8 @@ def to_quad_int_tpairs(dcoll, u, quad_tag):
 # {{{ variable-coefficient advection
 
 class VariableCoefficientAdvectionOperator(AdvectionOperatorBase):
-    def __init__(self, dcoll, v, inflow_u, flux_type="central", quad_tag=None):
+    def __init__(self, dcoll, v, inflow_u, flux_type="central", quad_tag=None,
+                 vel_func=None):
         super().__init__(dcoll, v, inflow_u, flux_type=flux_type)
 
         if quad_tag is None:
@@ -217,11 +218,12 @@ class VariableCoefficientAdvectionOperator(AdvectionOperatorBase):
             quad_tag = DISCR_TAG_BASE
 
         self.quad_tag = quad_tag
+        self.vel_func = vel_func
 
-    def flux(self, u_tpair):
+    def flux(self, u_tpair, v):
         from grudge.dof_desc import DD_VOLUME_ALL
 
-        surf_v = op.project(self.dcoll, DD_VOLUME_ALL, u_tpair.dd, self.v)
+        surf_v = op.project(self.dcoll, DD_VOLUME_ALL, u_tpair.dd, v)
         return advection_weak_flux(self.dcoll, self.flux_type, u_tpair, surf_v)
 
     def operator(self, t, u):
@@ -235,9 +237,12 @@ class VariableCoefficientAdvectionOperator(AdvectionOperatorBase):
         quad_dd = as_dofdesc(DTAG_VOLUME_ALL, self.quad_tag)
 
         dcoll = self.dcoll
+        v = self.v
+        if self.vel_func:
+            v = self.vel_func(t)
 
         def flux(tpair):
-            return op.project(dcoll, tpair.dd, face_dd, self.flux(tpair))
+            return op.project(dcoll, tpair.dd, face_dd, self.flux(tpair, v))
 
         def to_quad(arg):
             return op.project(dcoll, DD_VOLUME_ALL, quad_dd, arg)
@@ -250,7 +255,10 @@ class VariableCoefficientAdvectionOperator(AdvectionOperatorBase):
         else:
             inflow_flux = 0
 
-        quad_v = to_quad(self.v)
+        quad_v = to_quad(v)
+        if self.vel_func:
+            quad_v = to_quad(self.vel_func(t))
+
         quad_u = to_quad(u)
 
         return (
