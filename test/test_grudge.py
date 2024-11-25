@@ -53,10 +53,10 @@ pytest_generate_tests = pytest_generate_tests_for_array_contexts(
 
 # {{{ mass operator trig integration
 
+@pytest.mark.parametrize("tpe", [True, False])
 @pytest.mark.parametrize("ambient_dim", [1, 2, 3])
-@pytest.mark.parametrize("discr_tag", [dof_desc.DISCR_TAG_BASE,
-                                       dof_desc.DISCR_TAG_QUAD])
-def test_mass_mat_trig(actx_factory, ambient_dim, discr_tag):
+@pytest.mark.parametrize("use_overint", [False, True])
+def test_mass_mat_trig(actx_factory, tpe, ambient_dim, use_overint):
     """Check the integral of some trig functions on an interval using the mass
     matrix.
     """
@@ -67,23 +67,27 @@ def test_mass_mat_trig(actx_factory, ambient_dim, discr_tag):
 
     a = -4.0 * np.pi
     b = +9.0 * np.pi
-    true_integral = 13*np.pi/2 * (b - a)**(ambient_dim - 1)
 
+    true_integral = 13*np.pi/2 * (b - a)**(ambient_dim - 1)
+    discr_tag = dof_desc.DISCR_TAG_QUAD if use_overint else dof_desc.DISCR_TAG_BASE
     from meshmode.discretization.poly_element import QuadratureSimplexGroupFactory
 
     dd_quad = dof_desc.DOFDesc(dof_desc.DTAG_VOLUME_ALL, discr_tag)
+    discr_order = order
     if discr_tag is dof_desc.DISCR_TAG_BASE:
         discr_tag_to_group_factory = {}
     else:
+        discr_order = None
         discr_tag_to_group_factory = {
-            discr_tag: QuadratureSimplexGroupFactory(order=2*order)
+            dof_desc.DISCR_TAG_BASE: InterpolatoryEdgeClusteredGroupFactory(order),
+            dof_desc.DISCR_TAG_QUAD: QuadratureGroupFactory(order=2*order)
         }
 
     mesh = mgen.generate_regular_rect_mesh(
             a=(a,)*ambient_dim, b=(b,)*ambient_dim,
             nelements_per_axis=(nel_1d,)*ambient_dim, order=1)
     dcoll = make_discretization_collection(
-        actx, mesh, order=order,
+        actx, mesh, order=discr_order,
         discr_tag_to_group_factory=discr_tag_to_group_factory
     )
 
@@ -155,26 +159,35 @@ def _spheroid_surface_area(radius, aspect_ratio):
 
 
 @pytest.mark.parametrize("name", [
-    "2-1-ellipse", "spheroid", "box2d", "box3d"
+    "box2d-tpe", "box3d-tpe", "box2d", "box3d", "2-1-ellipse", "spheroid",
     ])
-def test_mass_surface_area(actx_factory, name):
+@pytest.mark.parametrize("oi", [False, True])
+def test_mass_surface_area(actx_factory, name, oi):
+    from grudge.dof_desc import DISCR_TAG_BASE, DISCR_TAG_QUAD, as_dofdesc
     actx = actx_factory()
+    qtag = DISCR_TAG_QUAD if oi else DISCR_TAG_BASE
+    vol_dd_base = as_dofdesc(dof_desc.DTAG_VOLUME_ALL)
+    vol_dd_quad = vol_dd_base.with_discr_tag(qtag)
 
     # {{{ cases
 
     order = 4
-
+    tpe = name.endswith("-tpe")
     if name == "2-1-ellipse":
+        if tpe:
+            pytest.skip()
         builder = mesh_data.EllipseMeshBuilder(radius=3.1, aspect_ratio=2.0)
         surface_area = _ellipse_surface_area(builder.radius, builder.aspect_ratio)
     elif name == "spheroid":
+        if tpe:
+            pytest.skip()
         builder = mesh_data.SpheroidMeshBuilder()
         surface_area = _spheroid_surface_area(builder.radius, builder.aspect_ratio)
-    elif name == "box2d":
-        builder = mesh_data.BoxMeshBuilder2D()
+    elif name.startswith("box2d"):
+        builder = mesh_data.BoxMeshBuilder2D(tpe=tpe)
         surface_area = 1.0
-    elif name == "box3d":
-        builder = mesh_data.BoxMeshBuilder3D()
+    elif name.startswith("box3d"):
+        builder = mesh_data.BoxMeshBuilder3D(tpe=tpe)
         surface_area = 1.0
     else:
         raise ValueError(f"unknown geometry name: {name}")
@@ -189,17 +202,24 @@ def test_mass_surface_area(actx_factory, name):
 
     for resolution in builder.resolutions:
         mesh = builder.get_mesh(resolution, order)
-        dcoll = make_discretization_collection(actx, mesh, order=order)
-        volume_discr = dcoll.discr_from_dd(dof_desc.DD_VOLUME_ALL)
+        dcoll = make_discretization_collection(
+                   actx, mesh,
+                   discr_tag_to_group_factory={
+                       DISCR_TAG_BASE: InterpolatoryEdgeClusteredGroupFactory(order),
+                       DISCR_TAG_QUAD: QuadratureGroupFactory(3 * order)
+                   })
+        volume_discr = dcoll.discr_from_dd(vol_dd_quad)
+        nodes = actx.thaw(volume_discr.nodes())
 
         logger.info("ndofs:     %d", volume_discr.ndofs)
         logger.info("nelements: %d", volume_discr.mesh.nelements)
 
         # {{{ compute surface area
 
-        dd = dof_desc.DD_VOLUME_ALL
+        dd = vol_dd_quad
         ones_volm = volume_discr.zeros(actx) + 1
         approx_surface_area = actx.to_numpy(op.integral(dcoll, dd, ones_volm))
+        print(f"approx_surface_area({name})={approx_surface_area}")
 
         logger.info(
             f"surface: got {approx_surface_area:.5e} / expected {surface_area:.5e}")  # noqa: G004
@@ -220,6 +240,154 @@ def test_mass_surface_area(actx_factory, name):
 
     assert eoc.max_error() < 3e-13 or eoc.order_estimate() > order
 
+
+@pytest.mark.parametrize("name", [
+    "interval", "box2d", "box2d-tpe", "box3d", "box3d-tpe"
+    ])
+# @pytest.mark.parametrize("discr_order", [1, 2, 3, 4, 5])
+def test_correctness_of_quadrature(actx_factory, name):
+    from grudge.dof_desc import DISCR_TAG_BASE, DISCR_TAG_QUAD, as_dofdesc
+    actx = actx_factory()
+    vol_dd_base = as_dofdesc(dof_desc.DTAG_VOLUME_ALL)
+    vol_dd_quad = vol_dd_base.with_discr_tag(DISCR_TAG_QUAD)
+
+    # {{{ cases
+
+    tol = 5e-13
+    # discr_order = 1
+    dim = None
+    mesh_order = 1
+
+    tpe = name.endswith("-tpe")
+    if name.startswith("box2d"):
+        builder = mesh_data.BoxMeshBuilder2D(tpe=tpe,
+                                             a=(0, 0),
+                                             b=(2.0, 2.0))
+        dim = 2
+    elif name.startswith("box3d"):
+        builder = mesh_data.BoxMeshBuilder3D(tpe=tpe,
+                                             a=(0, 0, 0),
+                                             b=(2.0, 2.0, 2.0))
+        dim = 3
+    elif name == "interval":
+        builder = mesh_data.BoxMeshBuilder1D(tpe=False, a=(0.0,),
+                                             b=(2.0,))
+        dim = 1.0
+    else:
+        raise ValueError(f"unknown geometry name: {name}")
+    exact_volume = 2.0**dim
+    print(f"Domain: {name} ({dim}d), {exact_volume=}")
+    print(f"======================================================")
+
+    # }}}
+
+    # {{{ convergence
+
+    from pytools.convergence import EOCRecorder
+    for discr_order in range(1, 8):
+        print(f"   {discr_order=}")
+        print("   --------------------")
+        report_discr = True
+        for field_order in range(1, max(2*discr_order+1, 8)):
+            report_field_order = True
+            eoc_base = EOCRecorder()
+            eoc_quad = EOCRecorder()
+            for resolution in builder.resolutions:
+                mesh = builder.get_mesh(resolution, mesh_order)
+                dcoll = make_discretization_collection(
+                    actx, mesh,
+                    discr_tag_to_group_factory={
+                        DISCR_TAG_BASE:
+                        InterpolatoryEdgeClusteredGroupFactory(discr_order),
+                        DISCR_TAG_QUAD: QuadratureGroupFactory(discr_order)
+                    })
+                vol_discr_base = dcoll.discr_from_dd(vol_dd_base)
+                vol_discr_quad = dcoll.discr_from_dd(vol_dd_quad)
+                if report_discr:
+                    nelem = vol_discr_base.mesh.nelements
+                    ndofs_base = vol_discr_base.ndofs
+                    ndofs_quad = vol_discr_quad.ndofs
+                    dofs_per_el_base = ndofs_base/nelem
+                    dofs_per_el_quad = ndofs_quad/nelem
+                    print(f"   - {dofs_per_el_base=}, {dofs_per_el_quad=}")
+                    report_discr = False
+                if report_field_order:
+                    print(f"      - {field_order=}")
+                    print("      - - - - - - - - - -")
+                    report_field_order = False
+                nodes_base = actx.thaw(vol_discr_base.nodes())
+                nodes_quad = actx.thaw(vol_discr_quad.nodes())
+                ones_base = 0*nodes_base[0] + 1
+                ones_quad = 0*nodes_quad[0] + 1
+
+                approx_vol_base = \
+                    actx.to_numpy(op.integral(dcoll, vol_dd_base, ones_base))
+                approx_vol_quad = \
+                    actx.to_numpy(op.integral(dcoll, vol_dd_quad, ones_quad))
+                err_vol_base = abs(approx_vol_base - exact_volume)/exact_volume
+                err_vol_quad = abs(approx_vol_quad - exact_volume)/exact_volume
+
+                logger.info(
+                    f"Name: {name} ({dim}d)\n"
+                    f"Exact volume: {exact_volume}\n"
+                    f"volume base: got {approx_vol_base:.12e}\n"  # noqa: G004
+                    f"volume quad: got {approx_vol_quad:.12e}\n")  # noqa: G004
+
+                # Quadrature should get exact volume for all discr (p >= 1)
+                assert err_vol_base < tol
+                assert err_vol_quad < tol
+
+                field_base = nodes_base[0]**field_order
+                field_quad = nodes_quad[0]**field_order
+                if dim > 1:
+                    field_base = sum(nodes_base[i]**field_order
+                                     for i in range(dim))
+                    field_quad = sum(nodes_quad[i]**field_order
+                                     for i in range(dim))
+                ofac = 1.0/2**field_order
+                field_base = ofac * field_base * (field_order + 1.0)
+                field_quad = ofac * field_quad * (field_order + 1.0)
+                exact_integral = dim*exact_volume
+
+                integral_base =  \
+                    actx.to_numpy(op.integral(dcoll, vol_dd_base, field_base))
+                integral_quad =  \
+                    actx.to_numpy(op.integral(dcoll, vol_dd_quad, field_quad))
+                err_base = \
+                    abs(integral_base - exact_integral)/exact_integral
+                err_quad = \
+                    abs(integral_quad - exact_integral)/exact_integral
+
+                if field_order <= discr_order:
+                    assert err_base < tol
+                    assert err_quad < tol
+
+                # compute max element size
+                from grudge.dt_utils import h_max_from_volume
+                h_max = h_max_from_volume(dcoll)
+
+                eoc_base.add_data_point(actx.to_numpy(h_max), err_base)
+                eoc_quad.add_data_point(actx.to_numpy(h_max), err_quad)
+
+            logger.info("volume error(base)\n%s", str(eoc_base))
+            logger.info("volume error(quad)\n%s", str(eoc_quad))
+            print("---- base -----")
+            print(f"{eoc_base.pretty_print()}")
+            print("---- quad -----")
+            print(f"{eoc_quad.pretty_print()}")
+
+            # Sanity check here: *must* be exact if discr_order is sufficient
+            if discr_order >= field_order:
+                assert eoc_base.max_error() < tol
+                assert eoc_quad.max_error() < tol
+            else:
+                if eoc_base.max_error() > tol:  # *can* be exact(ish) otherwise
+                    assert eoc_base.order_estimate() > discr_order
+                if eoc_quad.max_error() > tol:
+                    assert eoc_quad.order_estimate() > discr_order
+
+        print("-=-=-=-=-=-=-=-=-=-=-=-=-=--=-=-=-")
+    print("==============================")
 # }}}
 
 
@@ -974,13 +1142,14 @@ def test_convergence_maxwell(actx_factory,  order):
 # {{{ models: variable coefficient advection oversampling
 
 @pytest.mark.parametrize("order", [2, 3, 4])
-def test_improvement_quadrature(actx_factory, order):
+@pytest.mark.parametrize("tpe", [False, True])
+def test_improvement_quadrature(actx_factory, order, tpe):
     """Test whether quadrature improves things and converges"""
-    from meshmode.discretization.poly_element import QuadratureSimplexGroupFactory
-    from meshmode.mesh import BTAG_ALL
-    from pytools.convergence import EOCRecorder
-
     from grudge.models.advection import VariableCoefficientAdvectionOperator
+    from pytools.convergence import EOCRecorder
+    # from meshmode.discretization.poly_element \
+    #    import QuadratureSimplexGroupFactory
+    from meshmode.mesh import BTAG_ALL
 
     actx = actx_factory()
 
@@ -1001,23 +1170,30 @@ def test_improvement_quadrature(actx_factory, order):
         else:
             qtag = None
 
+        group_cls = TensorProductElementGroup if tpe else None
+        qfac = 2 if tpe else 4
         ns = [20, 25]
+        discr_order = order
         for n in ns:
             mesh = mgen.generate_regular_rect_mesh(
                 a=(-0.5,)*dims,
                 b=(0.5,)*dims,
                 nelements_per_axis=(n,)*dims,
-                order=order)
+                order=order, group_cls=group_cls)
 
             if use_quad:
                 discr_tag_to_group_factory = {
-                    qtag: QuadratureSimplexGroupFactory(order=4*order)
+                    dof_desc.DISCR_TAG_BASE:
+                    InterpolatoryEdgeClusteredGroupFactory(order),
+                    dof_desc.DISCR_TAG_QUAD:
+                    QuadratureGroupFactory(order=qfac*order)
                 }
+                discr_order = None
             else:
                 discr_tag_to_group_factory = {}
 
             dcoll = make_discretization_collection(
-                actx, mesh, order=order,
+                actx, mesh, order=discr_order,
                 discr_tag_to_group_factory=discr_tag_to_group_factory
             )
 
@@ -1049,9 +1225,12 @@ def test_improvement_quadrature(actx_factory, order):
     eoc, errs = conv_test("no quadrature", False)
     q_eoc, q_errs = conv_test("with quadrature", True)
 
-    assert q_eoc > eoc
     assert (q_errs < errs).all()
     assert q_eoc > order - 0.1
+    # Fails for all tensor-product element types
+    if not tpe:
+        assert q_eoc > eoc
+
 
 # }}}
 
