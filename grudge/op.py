@@ -92,10 +92,10 @@ from meshmode.discretization.poly_element import (
 )
 from meshmode.dof_array import DOFArray
 from meshmode.transform_metadata import (
+    DiscretizationAmbientDimAxisTag,
     DiscretizationDOFAxisTag,
     DiscretizationElementAxisTag,
-    DiscretizationFaceAxisTag,
-    FirstAxisIsElementsTag,
+    DiscretizationTopologicalDimAxisTag,
 )
 from modepy.tools import (
     reshape_array_for_tensor_product_space as fold,
@@ -142,7 +142,7 @@ from grudge.tools import rec_map_subarrays
 from grudge.trace_pair import (
     bdry_trace_pair,
     bv_trace_pair,
-    connected_ranks,
+    connected_parts,
     cross_rank_trace_pairs,
     interior_trace_pair,
     interior_trace_pairs,
@@ -152,16 +152,13 @@ from grudge.trace_pair import (
 )
 from grudge.transform.metadata import (
     TensorProductDOFAxisTag,
-    TensorProductMassOperatorInverseTag,
-    TensorProductMassOperatorTag,
-    TensorProductOperatorAxisTag,
 )
 
 
 __all__ = (
     "bdry_trace_pair",
     "bv_trace_pair",
-    "connected_ranks",
+    "connected_parts",
     "cross_rank_trace_pairs",
     "elementwise_integral",
     "elementwise_max",
@@ -611,7 +608,11 @@ def _weak_tensor_product_single_axis_derivative(
         metrics: ArrayOrContainer
     ) -> ArrayOrContainer:
 
-    vec_with_metrics = vec * metrics[xyz_axis]
+    vec_with_metrics = actx.tag_axis(
+        0,
+        DiscretizationTopologicalDimAxisTag(),
+        vec * metrics[xyz_axis]
+    )
     weak_derivative = 0.0
 
     stiff_t = reference_stiffness_transpose_matrices(
@@ -721,8 +722,15 @@ def _weak_scalar_grad(dcoll, dd_in, vec, *args,
         times_area_element=False,
         _use_geoderiv_connection=actx.supports_nonscalar_broadcasting)
 
-    vec_scaled = vec * area_element(actx, dcoll, dd=dd_in,
+    vec_scaled = tag_axes(
+        actx,
+        {
+            0: DiscretizationElementAxisTag(),
+            1: DiscretizationDOFAxisTag()
+        },
+        vec * area_element(actx, dcoll, dd=dd_in,
         _use_geoderiv_connection=actx.supports_nonscalar_broadcasting)
+    )
 
     # }}}
 
@@ -758,8 +766,16 @@ def _weak_scalar_div(dcoll, dd_in, vecs, *args,
         times_area_element=False,
         _use_geoderiv_connection=actx.supports_nonscalar_broadcasting)
 
-    vec_scaled = vec * area_element(actx, dcoll, dd=dd_in,
+    vec_scaled = tag_axes(
+        actx,
+        {
+            0: DiscretizationAmbientDimAxisTag(),
+            1: DiscretizationElementAxisTag(),
+            2: DiscretizationDOFAxisTag()
+        },
+        vec * area_element(actx, dcoll, dd=dd_in,
         _use_geoderiv_connection=actx.supports_nonscalar_broadcasting)
+    )
 
     # }}}
 
@@ -1097,9 +1113,9 @@ def _apply_face_mass_simplicial(
             use_tensor_product_fast_eval=False
         ),
         vec.reshape(
-                volume_group.mesh_el_group.nfaces,
-                volume_group.nelements,
-                face_group.nunit_dofs),
+            volume_group.mesh_el_group.nfaces,
+            volume_group.nelements,
+            face_group.nunit_dofs),
         arg_names=("ref_face_mass_mat",  "vec")
     )
 

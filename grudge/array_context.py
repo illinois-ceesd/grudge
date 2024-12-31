@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from warnings import warn
 
+import pytato as pt
 from typing_extensions import Self
 
 from meshmode.array_context import (
@@ -81,7 +82,9 @@ except ImportError:
 try:
     # FIXME: temporary workaround while FusionContractorArrayContext
     # is not available in meshmode's main branch
-    from meshmode.array_context import FusionContractorArrayContext
+    from meshmode.array_context import (
+        FusionContractorArrayContext as FusionContractorArrayContextBase
+    )
 
     try:
         # Crude check if we have the correct loopy branch
@@ -98,6 +101,49 @@ try:
 
 except ImportError:
     _HAVE_FUSION_ACTX = False
+
+if _HAVE_FUSION_ACTX:
+    def remove_redundant_tensor_product_reshapes(ary):
+        # FIXME: variable names can be more clear
+        if isinstance(ary, pt.Reshape):
+            if isinstance(ary.array, pt.Reshape):
+                if ary.array.array.shape == ary.shape:
+                    return ary.array.array
+        return ary
+
+    def remove_redundant_index_lambda_expressions(ary):
+        # FIXME: this can be made much more robust
+        if isinstance(ary, pt.IndexLambda):
+            if len(ary.shape) >= 3:
+                if 0.0 in ary.expr.children:
+                    return list(ary.bindings.values())[0]
+
+        return ary
+
+    class FusionContractorArrayContext(FusionContractorArrayContextBase):
+        def transform_dag(self, dag):
+            from grudge.transform.mappers import (
+                InverseMassDistributor,
+                MassInverseTimesStiffnessSimplifier,
+                RedundantMassTimesMassInverseRemover,
+            )
+
+            # step 1: distribute mass inverse through DAG, across index lambdas
+            dag = InverseMassDistributor()(dag)
+
+            # step 2: remove mass-times-mass-inverse einsums
+            dag = RedundantMassTimesMassInverseRemover()(dag)
+
+            # step 3: create new operator out of inverse mass times stiffness
+            dag = MassInverseTimesStiffnessSimplifier()(dag)
+
+            # step 4: clean up
+            dag = pt.transform.map_and_copy(
+                dag, remove_redundant_tensor_product_reshapes)
+            dag = pt.transform.map_and_copy(
+                dag, remove_redundant_index_lambda_expressions)
+
+            return super().transform_dag(dag)
 
 
 from arraycontext import ArrayContext, NumpyArrayContext
