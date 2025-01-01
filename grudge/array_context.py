@@ -48,7 +48,7 @@ from meshmode.array_context import (
     PyOpenCLArrayContext as _PyOpenCLArrayContextBase,
     PytatoPyOpenCLArrayContext as _PytatoPyOpenCLArrayContextBase,
 )
-from pytools import to_identifier
+from pytools import ProcessLogger, to_identifier
 from pytools.tag import Tag
 
 
@@ -128,6 +128,8 @@ if _HAVE_FUSION_ACTX:
                 RedundantMassTimesMassInverseRemover,
             )
 
+            num_nodes_before = pt.analysis.get_num_nodes(dag)
+
             # step 1: distribute mass inverse through DAG, across index lambdas
             dag = InverseMassDistributor()(dag)
 
@@ -142,6 +144,14 @@ if _HAVE_FUSION_ACTX:
                 dag, remove_redundant_tensor_product_reshapes)
             dag = pt.transform.map_and_copy(
                 dag, remove_redundant_index_lambda_expressions)
+
+            num_nodes_after = pt.analysis.get_num_nodes(dag)
+
+            with ProcessLogger(logger, "tensor-product transformations"):
+                if num_nodes_before != num_nodes_after:
+                    logger.info("tensor-product DAG transformations: "
+                                "%d nodes removed",
+                                num_nodes_before - num_nodes_after)
 
             return super().transform_dag(dag)
 
