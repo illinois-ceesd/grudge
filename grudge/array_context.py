@@ -128,30 +128,26 @@ if _HAVE_FUSION_ACTX:
                 RedundantMassTimesMassInverseRemover,
             )
 
-            num_nodes_before = pt.analysis.get_num_nodes(dag)
+            # FIXME: disable for now; errors with new operators
+            if 0:
+                num_nodes_before = pt.analysis.get_num_nodes(dag)
 
-            # step 1: distribute mass inverse through DAG, across index lambdas
-            dag = InverseMassDistributor()(dag)
+                # step 1: distribute mass inverse through DAG, across index lambdas
+                dag = InverseMassDistributor()(dag)
 
-            # step 2: remove mass-times-mass-inverse einsums
-            dag = RedundantMassTimesMassInverseRemover()(dag)
+                # step 2: remove mass-times-mass-inverse einsums
+                dag = RedundantMassTimesMassInverseRemover()(dag)
 
-            # step 3: create new operator out of inverse mass times stiffness
-            dag = MassInverseTimesStiffnessSimplifier()(dag)
+                # step 3: create new operator out of inverse mass times stiffness
+                dag = MassInverseTimesStiffnessSimplifier()(dag)
 
-            # step 4: clean up
-            dag = pt.transform.map_and_copy(
-                dag, remove_redundant_tensor_product_reshapes)
-            dag = pt.transform.map_and_copy(
-                dag, remove_redundant_index_lambda_expressions)
+                num_nodes_after = pt.analysis.get_num_nodes(dag)
 
-            num_nodes_after = pt.analysis.get_num_nodes(dag)
-
-            with ProcessLogger(logger, "tensor-product transformations"):
-                if num_nodes_before != num_nodes_after:
-                    logger.info("tensor-product DAG transformations: "
-                                "%d nodes removed",
-                                num_nodes_before - num_nodes_after)
+                with ProcessLogger(logger, "tensor-product transformations"):
+                    if num_nodes_before != num_nodes_after:
+                        logger.info("tensor-product DAG transformations: "
+                                    "%d nodes removed",
+                                    num_nodes_before - num_nodes_after)
 
             return super().transform_dag(dag)
 
