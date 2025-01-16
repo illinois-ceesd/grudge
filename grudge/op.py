@@ -95,6 +95,7 @@ from meshmode.transform_metadata import (
     DiscretizationAmbientDimAxisTag,
     DiscretizationDOFAxisTag,
     DiscretizationElementAxisTag,
+    DiscretizationFaceAxisTag,
     DiscretizationTopologicalDimAxisTag,
 )
 from modepy.tools import (
@@ -189,9 +190,6 @@ __all__ = (
     "weak_local_div",
     "weak_local_grad",
     )
-
-# TODO:
-# 1. implement proper axis and array tags
 
 
 # {{{ tensor product operator application helper
@@ -627,8 +625,7 @@ def _weak_tensor_product_single_axis_derivative(
 
     for rst_axis in range(input_group.dim):
         apply_mass_axes = set(range(input_group.dim)) - {rst_axis}
-        weak_ref_derivative = fold(input_group.space,
-                                   vec_with_metrics[rst_axis])
+        weak_ref_derivative = fold(input_group.space, vec_with_metrics[rst_axis])
 
         for ax in apply_mass_axes:
             weak_ref_derivative = _single_axis_contraction(
@@ -1112,10 +1109,18 @@ def _apply_face_mass_simplicial(
             dtype=vec.dtype,
             use_tensor_product_fast_eval=False
         ),
-        vec.reshape(
-            volume_group.mesh_el_group.nfaces,
-            volume_group.nelements,
-            face_group.nunit_dofs),
+        tag_axes(
+            actx,
+            {
+                0: DiscretizationFaceAxisTag(),
+                1: DiscretizationElementAxisTag(),
+                2: DiscretizationDOFAxisTag()
+            },
+            vec.reshape(
+                volume_group.mesh_el_group.nfaces,
+                volume_group.nelements,
+                face_group.nunit_dofs)
+        ),
         arg_names=("ref_face_mass_mat",  "vec")
     )
 

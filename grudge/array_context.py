@@ -121,35 +121,78 @@ if _HAVE_FUSION_ACTX:
         return ary
 
     class FusionContractorArrayContext(FusionContractorArrayContextBase):
+
+        def __init__(
+                self, queue: "cl.CommandQueue", allocator=None, *,
+                use_memory_pool: Optional[bool] = None,
+                compile_trace_callback: Optional[Callable[[Any, str, Any], None]] = None,
+                use_axis_tag_inference_fallback: bool = False,
+                use_einsum_inference_fallback: bool = False,
+                use_tp_transforms: bool = True,
+
+                # do not use: only for testing
+                _force_svm_arg_limit: Optional[int] = None,
+                ) -> None:
+            super().__init__(
+                queue, allocator,
+                use_memory_pool=use_memory_pool,
+                compile_trace_callback=compile_trace_callback,
+                _force_svm_arg_limit=_force_svm_arg_limit)
+            self.use_axis_tag_inference_fallback = use_axis_tag_inference_fallback
+            self.use_einsum_inference_fallback = use_einsum_inference_fallback
+            self.use_tp_transforms = True
+
         def transform_dag(self, dag):
             from grudge.transform.mappers import (
-                InverseMassDistributor,
-                MassInverseTimesStiffnessSimplifier,
-                RedundantMassTimesMassInverseRemover,
+                tensor_product_algebraic_transforms,
+                MassCounter,
+                MassInverseCounter,
             )
 
-            # FIXME: disable for now; errors with new operators
-            if 0:
+            if self.use_tp_transforms:
                 num_nodes_before = pt.analysis.get_num_nodes(dag)
+                with ProcessLogger(logger, "tensor-product transformations"):
+                    logger.info(
+                        "tensor-product DAG transformations: "
+                        "Num mass applications pre-xform: %d; "
+                        "Num inv. mass applications pre-xform: %d",
+                        MassCounter()(dag),
+                        MassInverseCounter()(dag))
 
-                # step 1: distribute mass inverse through DAG, across index lambdas
-                dag = InverseMassDistributor()(dag)
+                dag = tensor_product_algebraic_transforms(dag)
 
-                # step 2: remove mass-times-mass-inverse einsums
-                dag = RedundantMassTimesMassInverseRemover()(dag)
+                dag = pt.transform.map_and_copy(
+                    dag, remove_redundant_tensor_product_reshapes)
 
-                # step 3: create new operator out of inverse mass times stiffness
-                dag = MassInverseTimesStiffnessSimplifier()(dag)
+                dag = pt.transform.map_and_copy(
+                    dag, remove_redundant_index_lambda_expressions)
 
                 num_nodes_after = pt.analysis.get_num_nodes(dag)
 
                 with ProcessLogger(logger, "tensor-product transformations"):
+                    logger.info(
+                        "tensor-product DAG transformations: "
+                        "Num mass applications post-xform: %d; "
+                        "Num inv. mass applications post-xform: %d",
+                        MassCounter()(dag),
+                        MassInverseCounter()(dag))
                     if num_nodes_before != num_nodes_after:
-                        logger.info("tensor-product DAG transformations: "
-                                    "%d nodes removed",
-                                    num_nodes_before - num_nodes_after)
+                        logger.info(
+                            "tensor-product DAG transformations: %d nodes %s, "
+                            "with %d nodes before and %d nodes after",
+                            abs(num_nodes_before - num_nodes_after),
+                            ("added" if num_nodes_before < num_nodes_after
+                             else "removed"),
+                            num_nodes_before,
+                            num_nodes_after
+                        )
 
             return super().transform_dag(dag)
+
+        def transform_loopy_program(self, t_unit):
+            knl = t_unit.default_entrypoint
+
+            return super().transform_loopy_program(t_unit.with_kernel(knl))
 
 
 from arraycontext import ArrayContext, NumpyArrayContext
@@ -515,7 +558,9 @@ class MPIPytatoArrayContextBase(MPIBasedArrayContext):
             mpi_base_tag, allocator=None,
             compile_trace_callback: Optional[Callable[[Any, str, Any], None]] = None,
             use_axis_tag_inference_fallback: bool = False,
-            use_einsum_inference_fallback: bool = False) -> None:
+            use_einsum_inference_fallback: bool = False,
+            use_tp_transforms: bool = False
+        ) -> None:
         """
         :arg compile_trace_callback: A function of three arguments
             *(what, stage, ir)*, where *what* identifies the object
@@ -532,7 +577,8 @@ class MPIPytatoArrayContextBase(MPIBasedArrayContext):
         super().__init__(queue, allocator,
                 compile_trace_callback=compile_trace_callback,
                 use_axis_tag_inference_fallback=use_axis_tag_inference_fallback,
-                use_einsum_inference_fallback=use_einsum_inference_fallback)
+                use_einsum_inference_fallback=use_einsum_inference_fallback,
+                use_tp_transforms=use_tp_transforms)
 
         self.mpi_communicator = mpi_communicator
         self.mpi_base_tag = mpi_base_tag

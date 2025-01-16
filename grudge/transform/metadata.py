@@ -55,8 +55,10 @@ class TensorProductDOFAxisTag(DiscretizationEntityAxisTag):
     iaxis: int
 
 
-class TensorProductOperatorAxisTag(DiscretizationDOFAxisTag,
-                                   AxisIgnoredForPropagationTag):
+class TensorProductOperatorAxisTag(
+        DiscretizationEntityAxisTag,
+        AxisIgnoredForPropagationTag
+    ):
     """
     Signify an axis is part of a 1D operator applied to a tensor product
     discretization. No tags will be propagated to or along axes containing this
@@ -65,7 +67,16 @@ class TensorProductOperatorAxisTag(DiscretizationDOFAxisTag,
     pass
 
 
-class TensorProductMassOperatorTag(Tag):
+class TensorProductOperatorTag(Tag):
+    """
+    Used to tag an operator as one that acts on DOFs from a tensor-product
+    discretization. Used to make decisions about how to handle prefetching and
+    precomputing these operators.
+    """
+    pass
+
+
+class TensorProductMassOperatorTag(TensorProductOperatorTag):
     """
     Tag an operator as being a reference mass operator. Used to realize an
     algebraic simplification of redundant mass-times-mass-inverse operations
@@ -74,14 +85,14 @@ class TensorProductMassOperatorTag(Tag):
     pass
 
 
-class TensorProductMassOperatorInverseTag(Tag):
+class TensorProductMassOperatorInverseTag(TensorProductOperatorTag):
     """
     See `TensorProductMassOperatorTag`.
     """
     pass
 
 
-class TensorProductStiffnessOperatorTag(Tag):
+class TensorProductStiffnessOperatorTag(TensorProductOperatorTag):
     """
     Similar to `TensorProductMassOperatorTag`. Used to implement an
     associativity DAG transformation.
@@ -104,26 +115,26 @@ def get_dof_axis_tag_type(
 class AxesTagsEquationCollector(BaseAxesTagsEquationCollector):
     def map_reshape(self, expr: pt.Reshape) -> None:
         super().map_reshape(expr)
-    #
-    #     if (expr.size > 0
-    #             and (1 not in (expr.array.shape))  # leads to ambiguous newaxis
-    #             and (set(expr.shape) <= (set(expr.array.shape) | {1}))):
-    #         i_in_axis = 0
-    #         for i_out_axis, dim in enumerate(expr.shape):
-    #             if dim != 1:
-    #                 assert dim == expr.array.shape[i_in_axis]
-    #                 self.record_equation(
-    #                                 self.get_var_for_axis(expr.array,
-    #                                                       i_in_axis),
-    #                                 self.get_var_for_axis(expr,
-    #                                                       i_out_axis)
-    #                 )
-    #                 i_in_axis += 1
-    #     else:
-    #         # print(f"Skipping: {expr.array.shape} -> {expr.shape}")
-    #         # Wacky reshape => bail.
-    #         pass
-    # pass
+
+        if (expr.size > 0
+                and (1 not in (expr.array.shape))  # leads to ambiguous newaxis
+                and (set(expr.shape) <= (set(expr.array.shape) | {1}))):
+            i_in_axis = 0
+            for i_out_axis, dim in enumerate(expr.shape):
+                if dim != 1:
+                    assert dim == expr.array.shape[i_in_axis]
+                    self.record_equation(
+                                    self.get_var_for_axis(expr.array,
+                                                          i_in_axis),
+                                    self.get_var_for_axis(expr,
+                                                          i_out_axis)
+                    )
+                    i_in_axis += 1
+        else:
+            # print(f"Skipping: {expr.array.shape} -> {expr.shape}")
+            # Wacky reshape => bail.
+            pass
+    pass
 
 
 def unify_discretization_entity_tags(expr: ArrayContainer | ArrayOrNames
