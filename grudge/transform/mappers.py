@@ -264,16 +264,16 @@ class FaceMassResultReshaper(CopyMapper):
 
 
 def tensor_product_algebraic_transforms(dag):
-    # 0. preprocess face mass result (reshape to tp -> reshape from tp)
+    # 1. preprocess face mass result (reshape to tp -> reshape from tp)
     dag = FaceMassResultReshaper()(dag)
 
-    # 1. distribute the inverse mass to:
+    # 2. distribute the inverse mass to:
     #   - einsums with stiffness
     #   - einsums with mass
     #   - face mass (insert applications between reshapes)
     dag = InverseMassDistributor()(dag)
 
-    # 2. remove einsums with mass and mass inverse
+    # 3. remove einsums with mass and mass inverse
     dag = RedundantMassRemover()(dag)
 
     # done

@@ -140,24 +140,16 @@ if _HAVE_FUSION_ACTX:
                 _force_svm_arg_limit=_force_svm_arg_limit)
             self.use_axis_tag_inference_fallback = use_axis_tag_inference_fallback
             self.use_einsum_inference_fallback = use_einsum_inference_fallback
-            self.use_tp_transforms = True
+            self.use_tp_transforms = use_tp_transforms
 
         def transform_dag(self, dag):
             from grudge.transform.mappers import (
                 tensor_product_algebraic_transforms,
-                MassCounter,
-                MassInverseCounter,
             )
 
             if self.use_tp_transforms:
-                num_nodes_before = pt.analysis.get_num_nodes(dag)
                 with ProcessLogger(logger, "tensor-product transformations"):
-                    logger.info(
-                        "tensor-product DAG transformations: "
-                        "Num mass applications pre-xform: %d; "
-                        "Num inv. mass applications pre-xform: %d",
-                        MassCounter()(dag),
-                        MassInverseCounter()(dag))
+                    logger.info("tensor-product algebraic DAG transformations")
 
                 dag = tensor_product_algebraic_transforms(dag)
 
@@ -167,32 +159,7 @@ if _HAVE_FUSION_ACTX:
                 dag = pt.transform.map_and_copy(
                     dag, remove_redundant_index_lambda_expressions)
 
-                num_nodes_after = pt.analysis.get_num_nodes(dag)
-
-                with ProcessLogger(logger, "tensor-product transformations"):
-                    logger.info(
-                        "tensor-product DAG transformations: "
-                        "Num mass applications post-xform: %d; "
-                        "Num inv. mass applications post-xform: %d",
-                        MassCounter()(dag),
-                        MassInverseCounter()(dag))
-                    if num_nodes_before != num_nodes_after:
-                        logger.info(
-                            "tensor-product DAG transformations: %d nodes %s, "
-                            "with %d nodes before and %d nodes after",
-                            abs(num_nodes_before - num_nodes_after),
-                            ("added" if num_nodes_before < num_nodes_after
-                             else "removed"),
-                            num_nodes_before,
-                            num_nodes_after
-                        )
-
             return super().transform_dag(dag)
-
-        def transform_loopy_program(self, t_unit):
-            knl = t_unit.default_entrypoint
-
-            return super().transform_loopy_program(t_unit.with_kernel(knl))
 
 
 from arraycontext import ArrayContext, NumpyArrayContext
