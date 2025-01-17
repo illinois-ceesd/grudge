@@ -47,6 +47,7 @@ from pytato.transform import (
 )
 from grudge.transform.metadata import (
     TensorProductDOFAxisTag,
+    TensorProductOperatorTag,
     TensorProductMassOperatorInverseTag,
     TensorProductMassOperatorTag,
     TensorProductOperatorAxisTag,
@@ -106,17 +107,16 @@ class InverseMassAttacher(CopyMapperWithExtraArgs):
                     axis_tags = (TensorProductOperatorAxisTag(),)
                     axes = (Axis(tags=frozenset(axis_tags)),)*2
                     redn_descr = ReductionDescriptor(
-                        tags=frozenset((DiscretizationDOFAxisTag(),))
+                        tags=frozenset((TensorProductOperatorAxisTag(),))
                     )
                     redn_axis_to_redn_descr = immutabledict({
                         EinsumReductionAxis(0): redn_descr
                     })
 
-                    from grudge.transform.metadata import PrecomputeMeTag
                     new_args.append(a.copy(
                         axes=axes,
                         redn_axis_to_redn_descr=redn_axis_to_redn_descr
-                    ).tagged(PrecomputeMeTag()))
+                    ).tagged(TensorProductOperatorTag()))
 
                     continue
 
