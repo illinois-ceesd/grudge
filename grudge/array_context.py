@@ -128,7 +128,7 @@ if _HAVE_FUSION_ACTX:
                 compile_trace_callback: Optional[Callable[[Any, str, Any], None]] = None,
                 use_axis_tag_inference_fallback: bool = False,
                 use_einsum_inference_fallback: bool = False,
-                use_tp_transforms: bool = True,
+                use_tp_transforms: bool = False,
 
                 # do not use: only for testing
                 _force_svm_arg_limit: Optional[int] = None,

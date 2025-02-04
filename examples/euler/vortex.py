@@ -32,11 +32,16 @@ from grudge.array_context import PytatoPyOpenCLArrayContext, PyOpenCLArrayContex
 from grudge.models.euler import (
     vortex_initial_condition,
     EulerOperator,
-    EntropyStableEulerOperator
+    # EntropyStableEulerOperator
 )
 import grudge.op as op
-from grudge.array_context import PyOpenCLArrayContext, PytatoPyOpenCLArrayContext
+from grudge.array_context import (
+    FusionContractorArrayContext,
+    PyOpenCLArrayContext,
+    PytatoPyOpenCLArrayContext
+)
 from grudge.shortcuts import rk4_step
+from meshmode.mesh import SimplexElementGroup
 
 
 logger = logging.getLogger(__name__)
@@ -46,7 +51,8 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
                esdg=False,
                overintegration=False,
                flux_type="central",
-               visualize=False):
+               visualize=False,
+               group_cls=SimplexElementGroup):
 
     logger.info(
         """
@@ -57,10 +63,11 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
         entropy stable: %s\n
         overintegration: %s\n
         flux_type: %s\n
-        visualize: %s
+        visualize: %s\n
+        element type: %s
         """,
         order, final_time, resolution, esdg,
-        overintegration, flux_type, visualize
+        overintegration, flux_type, visualize, group_cls
     )
 
     # eos-related parameters
@@ -74,11 +81,12 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
         a=(0, -5),
         b=(20, 5),
         nelements_per_axis=(2*resolution, resolution),
-        periodic=(True, True))
+        periodic=(True, True),
+        group_cls=group_cls)
 
     from meshmode.discretization.poly_element import (
-        QuadratureSimplexGroupFactory,
-        default_simplex_group_factory,
+        InterpolatoryEdgeClusteredGroupFactory,
+        QuadratureGroupFactory
     )
 
     from grudge.discretization import make_discretization_collection
@@ -86,7 +94,7 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
 
     if esdg:
         case = "esdg-vortex"
-        operator_cls = EntropyStableEulerOperator
+        operator_cls = EulerOperator
     else:
         case = "vortex"
         operator_cls = EulerOperator
@@ -102,9 +110,8 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
     dcoll = make_discretization_collection(
         actx, mesh,
         discr_tag_to_group_factory={
-            DISCR_TAG_BASE: default_simplex_group_factory(
-                base_dim=mesh.dim, order=order),
-            DISCR_TAG_QUAD: QuadratureSimplexGroupFactory(2*order)
+            DISCR_TAG_BASE: InterpolatoryEdgeClusteredGroupFactory(order),
+            DISCR_TAG_QUAD: QuadratureGroupFactory(2*order)
         }
     )
 
@@ -121,8 +128,6 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
 
     def rhs(t, q):
         return euler_operator.operator(actx, t, q)
-
-    compiled_rhs = actx.compile(rhs)
 
     fields = vortex_initial_condition(actx.thaw(dcoll.nodes()))
 
@@ -144,24 +149,42 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
 
     step = 0
     t = 0.0
-    while t < final_time:
-        if step % 10 == 0:
-            norm_q = actx.to_numpy(op.norm(dcoll, fields, 2))
-            logger.info("[%04d] t = %.5f |q| = %.5e", step, t, norm_q)
 
-            if visualize:
-                vis.write_vtk_file(
-                    f"{exp_name}-{step:04d}.vtu",
-                    [
-                        ("rho", fields.mass),
-                        ("energy", fields.energy),
-                        ("momentum", fields.momentum)
-                    ]
-                )
-            assert norm_q < 200
+    compiled_rhs = actx.compile(rhs)
+
+    import time
+    start = time.time()
+    fields = rk4_step(fields, t, dt, compiled_rhs)
+    elapsed = time.time()
+
+    norm_q = actx.to_numpy(op.norm(dcoll, fields, 2))
+    logger.info("[%04d] t = %.5f |q| = %.5e, walltime (s) = %.5f",
+                step, t, norm_q, abs(start - elapsed))
+
+    t += dt
+    step += 1
+
+    while t < final_time:
+        if visualize:
+            vis.write_vtk_file(
+                f"{exp_name}-{step:04d}.vtu",
+                [
+                    ("rho", fields.mass),
+                    ("energy", fields.energy),
+                    ("momentum", fields.momentum)
+                ]
+            )
+        assert norm_q < 200
 
         fields = actx.thaw(actx.freeze(fields))
+        start = time.time()
         fields = rk4_step(fields, t, dt, compiled_rhs)
+        elapsed = time.time()
+
+        norm_q = actx.to_numpy(op.norm(dcoll, fields, 2))
+        logger.info("[%04d] t = %.5f |q| = %.5e, walltime (s) = %.5f",
+                    step, t, norm_q, abs(start - elapsed))
+
         t += dt
         step += 1
 
@@ -173,14 +196,23 @@ def main(ctx_factory, order=3, final_time=5, resolution=8,
          overintegration=False,
          lf_stabilization=False,
          visualize=False,
-         lazy=False):
+         lazy=False,
+         use_tpe=False):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
+    if use_tpe:
+        from meshmode.mesh import TensorProductElementGroup
+        group_cls = TensorProductElementGroup
+    else:
+        from meshmode.mesh import SimplexElementGroup
+        group_cls = SimplexElementGroup
+
     if lazy:
-        actx = PytatoPyOpenCLArrayContext(
+        actx = FusionContractorArrayContext(
             queue,
             allocator=cl_tools.MemoryPool(cl_tools.ImmediateAllocator(queue)),
+            use_tp_transforms=use_tpe
         )
     else:
         actx = PyOpenCLArrayContext(
@@ -208,7 +240,8 @@ def main(ctx_factory, order=3, final_time=5, resolution=8,
         esdg=esdg,
         overintegration=overintegration,
         flux_type=flux_type,
-        visualize=visualize
+        visualize=visualize,
+        group_cls=group_cls
     )
 
 
@@ -229,6 +262,8 @@ if __name__ == "__main__":
                         help="write out vtk output")
     parser.add_argument("--lazy", action="store_true",
                         help="switch to a lazy computation mode")
+    parser.add_argument("--tpe", action="store_true",
+                        help="use a tensor-product discretization")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -240,4 +275,5 @@ if __name__ == "__main__":
          overintegration=args.oi,
          lf_stabilization=args.lf,
          visualize=args.visualize,
-         lazy=args.lazy)
+         lazy=args.lazy,
+         use_tpe=args.tpe)
