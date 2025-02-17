@@ -48,7 +48,7 @@ from pytato.transform import (
 from grudge.transform.metadata import (
     TensorProductDOFAxisTag,
     TensorProductOperatorTag,
-    TensorProductMassOperatorInverseTag,
+    TensorProductMassInverseOperatorTag,
     TensorProductMassOperatorTag,
     TensorProductOperatorAxisTag,
     TensorProductStiffnessOperatorTag,
@@ -79,7 +79,7 @@ class MassInverseCounter(CombineMapper):
     def map_einsum(self, expr):
         acc = 0
         for arg in expr.args:
-            if arg.tags_of_type(TensorProductMassOperatorInverseTag):
+            if arg.tags_of_type(TensorProductMassInverseOperatorTag):
                 acc += 1
             if arg.tags_of_type(TensorProductStiffnessOperatorTag):
                 acc -= 1
@@ -181,13 +181,13 @@ class InverseMassAttacher(CopyMapperWithExtraArgs):
 class InverseMassDistributor(CopyMapper):
     def map_einsum(self, expr: Einsum) -> Array:
         for iarg, arg in enumerate(expr.args):
-            if not arg.tags_of_type(TensorProductMassOperatorInverseTag):
+            if not arg.tags_of_type(TensorProductMassInverseOperatorTag):
                 iarg_rec = iarg
                 break
 
         new_args = []
         for iarg, arg in enumerate(expr.args):
-            if arg.tags_of_type(TensorProductMassOperatorInverseTag):
+            if arg.tags_of_type(TensorProductMassInverseOperatorTag):
                 return InverseMassAttacher()(
                     self.rec(expr.args[iarg_rec]),
                     arg,
@@ -205,7 +205,7 @@ def check_redundant_mass(expr: Einsum) -> bool:
     found_inverse_mass = False
 
     for arg in expr.args:
-        if arg.tags_of_type(TensorProductMassOperatorInverseTag):
+        if arg.tags_of_type(TensorProductMassInverseOperatorTag):
             found_inverse_mass = True
         elif arg.tags_of_type(TensorProductMassOperatorTag):
             found_mass = True

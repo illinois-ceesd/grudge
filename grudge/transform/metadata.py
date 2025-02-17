@@ -45,6 +45,42 @@ class OutputIsTensorProductDOFArrayOrdered(Tag):
     pass
 
 
+class OperatorTag(Tag):
+    """
+    Used to signify that an array is an operator.
+    """
+
+
+class FaceMassOperatorTag(OperatorTag):
+    """
+    Used to signify than an array is a face mass operator.
+    """
+
+
+class MassOperatorTag(OperatorTag):
+    """
+    Used to signify that an array is a mass operator.
+    """
+
+
+class MassInverseOperatorTag(OperatorTag):
+    """
+    Used to signify that an array is an inverse mass operator.
+    """
+
+
+class DifferentiationOperatorTag(OperatorTag):
+    """
+    Used to signify that an array is a *strong* differentiation operator.
+    """
+
+
+class StiffnessOperatorTag(OperatorTag):
+    """
+    Used to signify that an array is a *weak* differentiation operator.
+    """
+
+
 @tag_dataclass
 class TensorProductDOFAxisTag(DiscretizationEntityAxisTag):
     """
@@ -85,11 +121,17 @@ class TensorProductMassOperatorTag(TensorProductOperatorTag):
     pass
 
 
-class TensorProductMassOperatorInverseTag(TensorProductOperatorTag):
+class TensorProductMassInverseOperatorTag(TensorProductOperatorTag):
     """
     See `TensorProductMassOperatorTag`.
     """
     pass
+
+
+class TensorProductDifferentiationOperatorTag(OperatorTag):
+    """
+    See `DifferentiationOperatorTag`.
+    """
 
 
 class TensorProductStiffnessOperatorTag(TensorProductOperatorTag):

@@ -77,7 +77,13 @@ from grudge.tools import (
     get_quadrature_for_face,
 )
 from grudge.transform.metadata import (
-    TensorProductMassOperatorInverseTag,
+    FaceMassOperatorTag,
+    MassOperatorTag,
+    MassInverseOperatorTag,
+    TensorProductDifferentiationOperatorTag,
+    DifferentiationOperatorTag,
+    StiffnessOperatorTag,
+    TensorProductMassInverseOperatorTag,
     TensorProductMassOperatorTag,
     TensorProductStiffnessOperatorTag,
     get_dof_axis_tag_type
@@ -117,8 +123,13 @@ def reference_derivative_matrices(
             axis_tags = ({
                 i: (dof_axis_tag(),) for i in range(2)
             })  # type: ignore
+
     if ary_tags is None:
         ary_tags = (NameHint("ref_deriv_mat"),)
+        if use_tensor_product_fast_eval:
+            ary_tags += (DifferentiationOperatorTag(),)
+        else:
+            ary_tags += (TensorProductDifferentiationOperatorTag(),)
 
     basis = get_element_group_basis(
         input_group, use_tensor_product_fast_eval=use_tensor_product_fast_eval)
@@ -177,6 +188,8 @@ def reference_stiffness_transpose_matrices(
         ary_tags = (NameHint("stiff_t"),)
         if use_tensor_product_fast_eval:
             ary_tags += (TensorProductStiffnessOperatorTag(),)  # type: ignore
+        else:
+            ary_tags += (StiffnessOperatorTag(),)
 
     basis = get_element_group_basis(
         output_group, use_tensor_product_fast_eval=use_tensor_product_fast_eval)
@@ -267,6 +280,8 @@ def reference_mass_matrix(
         ary_tags = (NameHint("ref_mass"),)
         if use_tensor_product_fast_eval:
             ary_tags += (TensorProductMassOperatorTag(),)  # type: ignore
+        else:
+            ary_tags += (MassOperatorTag(),)
 
     basis = get_element_group_basis(
         output_group, use_tensor_product_fast_eval=use_tensor_product_fast_eval)
@@ -334,7 +349,9 @@ def reference_inverse_mass_matrix(
     if ary_tags is None:
         ary_tags = (NameHint("ref_inv_mass"),)
         if use_tensor_product_fast_eval:
-            ary_tags += (TensorProductMassOperatorInverseTag(),)  # type: ignore
+            ary_tags += (TensorProductMassInverseOperatorTag(),)  # type: ignore
+        else:
+            ary_tags += (MassInverseOperatorTag(),)
 
     basis = get_element_group_basis(
         group, use_tensor_product_fast_eval=use_tensor_product_fast_eval)
@@ -394,7 +411,7 @@ def reference_face_mass_matrix(
             2: (DiscretizationDOFAxisTag(),)
         }  # type: ignore
     if ary_tags is None:
-        ary_tags = (NameHint("face_mass"),)
+        ary_tags = (NameHint("face_mass"), FaceMassOperatorTag()) # type: ignore
 
     face_mass = np.empty(
         (vol_group.nunit_dofs,
