@@ -76,7 +76,8 @@ from grudge.tools import (
     get_faces_for_volume_group,
     get_quadrature_for_face,
 )
-from grudge.transform.metadata import (
+from grudge.transform.metadata import get_dof_axis_tag_type
+from meshmode.transform_metadata import (
     FaceMassOperatorTag,
     MassOperatorTag,
     MassInverseOperatorTag,
@@ -86,7 +87,6 @@ from grudge.transform.metadata import (
     TensorProductMassInverseOperatorTag,
     TensorProductMassOperatorTag,
     TensorProductStiffnessOperatorTag,
-    get_dof_axis_tag_type
 )
 
 

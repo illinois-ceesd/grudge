@@ -45,7 +45,7 @@ from pytato.transform import (
     CopyMapper,
     CopyMapperWithExtraArgs,
 )
-from grudge.transform.metadata import (
+from meshmode.transform_metadata import (
     TensorProductDOFAxisTag,
     TensorProductOperatorTag,
     TensorProductMassInverseOperatorTag,

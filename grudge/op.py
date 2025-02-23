@@ -151,7 +151,7 @@ from grudge.trace_pair import (
     project_tracepair,
     tracepair_with_discr_tag,
 )
-from grudge.transform.metadata import (
+from meshmode.transform_metadata import (
     TensorProductDOFAxisTag,
 )
 
