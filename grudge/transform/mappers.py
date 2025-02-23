@@ -274,11 +274,9 @@ def tensor_product_algebraic_transforms(dag):
     #   - einsums with stiffness
     #   - einsums with mass
     #   - face mass (insert applications between reshapes)
-    # FIXME: takes a really long time
     dag = InverseMassDistributor()(dag)
 
     # 3. remove einsums with mass and mass inverse
-    # FIXME: takes a really long time
     dag = RedundantMassRemover()(dag)
 
     # done
