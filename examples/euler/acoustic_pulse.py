@@ -146,7 +146,7 @@ def run_acoustic_pulse(actx,
 
     from meshmode.mesh.generation import generate_regular_rect_mesh
 
-    dim = 3
+    dim = 2
     box_ll = -0.5
     box_ur = 0.5
     group_cls = TensorProductElementGroup if tpe else None
@@ -257,8 +257,7 @@ def main(ctx_factory, order=3, final_time=1, resolution=16,
     queue = cl.CommandQueue(cl_ctx)
 
     if lazy:
-        from grudge.array_context import FusionContractorArrayContext
-        actx = FusionContractorArrayContext(
+        actx = PytatoPyOpenCLArrayContext(
             queue,
             allocator=cl_tools.MemoryPool(cl_tools.ImmediateAllocator(queue)),
         )
