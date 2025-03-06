@@ -41,13 +41,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from warnings import warn
 
+import pytato as pt
 from typing_extensions import Self
 
 from meshmode.array_context import (
     PyOpenCLArrayContext as _PyOpenCLArrayContextBase,
     PytatoPyOpenCLArrayContext as _PytatoPyOpenCLArrayContextBase,
 )
-from pytools import to_identifier
+from pytools import ProcessLogger, to_identifier
 from pytools.tag import Tag
 
 
@@ -81,7 +82,9 @@ except ImportError:
 try:
     # FIXME: temporary workaround while FusionContractorArrayContext
     # is not available in meshmode's main branch
-    from meshmode.array_context import FusionContractorArrayContext
+    from meshmode.array_context import (
+        FusionContractorArrayContext as FusionContractorArrayContextBase
+    )
 
     try:
         # Crude check if we have the correct loopy branch
@@ -98,6 +101,65 @@ try:
 
 except ImportError:
     _HAVE_FUSION_ACTX = False
+
+if _HAVE_FUSION_ACTX:
+    def remove_redundant_tensor_product_reshapes(ary):
+        # FIXME: variable names can be more clear
+        if isinstance(ary, pt.Reshape):
+            if isinstance(ary.array, pt.Reshape):
+                if ary.array.array.shape == ary.shape:
+                    return ary.array.array
+        return ary
+
+    def remove_redundant_index_lambda_expressions(ary):
+        # FIXME: this can be made much more robust
+        if isinstance(ary, pt.IndexLambda):
+            if len(ary.shape) >= 3:
+                if 0.0 in ary.expr.children:
+                    return list(ary.bindings.values())[0]
+
+        return ary
+
+    class FusionContractorArrayContext(FusionContractorArrayContextBase):
+
+        def __init__(
+                self, queue: "cl.CommandQueue", allocator=None, *,
+                use_memory_pool: Optional[bool] = None,
+                compile_trace_callback: Optional[Callable[[Any, str, Any], None]] = None,
+                use_axis_tag_inference_fallback: bool = False,
+                use_einsum_inference_fallback: bool = False,
+                use_tp_transforms: bool = False,
+
+                # do not use: only for testing
+                _force_svm_arg_limit: Optional[int] = None,
+                ) -> None:
+            super().__init__(
+                queue, allocator,
+                use_memory_pool=use_memory_pool,
+                compile_trace_callback=compile_trace_callback,
+                _force_svm_arg_limit=_force_svm_arg_limit)
+            self.use_axis_tag_inference_fallback = use_axis_tag_inference_fallback
+            self.use_einsum_inference_fallback = use_einsum_inference_fallback
+            self.use_tp_transforms = use_tp_transforms
+
+        def transform_dag(self, dag):
+            from grudge.transform.mappers import (
+                tensor_product_algebraic_transforms,
+            )
+
+            if self.use_tp_transforms:
+                with ProcessLogger(logger, "tensor-product transformations"):
+                    logger.info("tensor-product algebraic DAG transformations")
+
+                dag = tensor_product_algebraic_transforms(dag)
+
+                dag = pt.transform.map_and_copy(
+                    dag, remove_redundant_tensor_product_reshapes)
+
+                dag = pt.transform.map_and_copy(
+                    dag, remove_redundant_index_lambda_expressions)
+
+            return super().transform_dag(dag)
 
 
 from arraycontext import ArrayContext, NumpyArrayContext
@@ -463,7 +525,9 @@ class MPIPytatoArrayContextBase(MPIBasedArrayContext):
             mpi_base_tag, allocator=None,
             compile_trace_callback: Optional[Callable[[Any, str, Any], None]] = None,
             use_axis_tag_inference_fallback: bool = False,
-            use_einsum_inference_fallback: bool = False) -> None:
+            use_einsum_inference_fallback: bool = False,
+            use_tp_transforms: bool = False
+        ) -> None:
         """
         :arg compile_trace_callback: A function of three arguments
             *(what, stage, ir)*, where *what* identifies the object
@@ -480,7 +544,8 @@ class MPIPytatoArrayContextBase(MPIBasedArrayContext):
         super().__init__(queue, allocator,
                 compile_trace_callback=compile_trace_callback,
                 use_axis_tag_inference_fallback=use_axis_tag_inference_fallback,
-                use_einsum_inference_fallback=use_einsum_inference_fallback)
+                use_einsum_inference_fallback=use_einsum_inference_fallback,
+                use_tp_transforms=use_tp_transforms)
 
         self.mpi_communicator = mpi_communicator
         self.mpi_base_tag = mpi_base_tag
