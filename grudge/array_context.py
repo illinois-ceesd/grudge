@@ -46,6 +46,7 @@ from typing_extensions import Self
 from meshmode.array_context import (
     PyOpenCLArrayContext as _PyOpenCLArrayContextBase,
     PytatoPyOpenCLArrayContext as _PytatoPyOpenCLArrayContextBase,
+    FEMEinsumTag,
 )
 from pytools import to_identifier
 from pytools.tag import Tag
@@ -250,14 +251,79 @@ class _DistributedLazilyPyOpenCLCompilingFunctionCaller(
 
         from pytools import ProcessLogger
 
-        self.actx._compile_trace_callback(self.f, "pre_deduplicate_data_wrappers",
+        with ProcessLogger(logger, "remove_duplicates"):
+            dict_of_named_arrays = pt.transform.Deduplicator()(dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "pre_unify_materialization_tags",
                 dict_of_named_arrays)
 
-        with ProcessLogger(logger, "deduplicate_data_wrappers[pre-partition]"):
+        with ProcessLogger(logger, "unify_materialization_tags"):
+            dict_of_named_arrays = pt.transform.unify_materialization_tags(
+                dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "post_unify_materialization_tags",
+                dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "pre_deduplicate_data_wrappers_1",
+                dict_of_named_arrays)
+
+        with ProcessLogger(logger, "deduplicate_data_wrappers_1[pre-partition]"):
             dict_of_named_arrays = pt.transform.deduplicate_data_wrappers(
                 dict_of_named_arrays)
 
-        self.actx._compile_trace_callback(self.f, "post_deduplicate_data_wrappers",
+        self.actx._compile_trace_callback(self.f, "post_deduplicate_data_wrappers_1",
+                dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "pre_zero_unused_call_bindings",
+                dict_of_named_arrays)
+
+        with ProcessLogger(logger, "zero_unused_call_bindings"):
+            dict_of_named_arrays = pt.zero_unused_call_bindings(dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "post_zero_unused_call_bindings",
+                dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "pre_precompute_subexpressions",
+                dict_of_named_arrays)
+
+        # with ProcessLogger(logger, "precompute_subexpressions"):
+        #     dict_of_named_arrays = pt.precompute_subexpressions(
+        #         dict_of_named_arrays, self.actx.freeze_thaw)
+
+        self.actx._compile_trace_callback(self.f, "post_precompute_subexpressions",
+                dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "pre_concatenate",
+                dict_of_named_arrays)
+
+        with ProcessLogger(logger, "concatenate_calls"):
+            dict_of_named_arrays = pt.concatenate_calls(
+                dict_of_named_arrays, lambda x: True, inherit_axes=True,
+                ignore_tag_types=frozenset({pt.tags.PrefixNamed, FEMEinsumTag}))
+
+        self.actx._compile_trace_callback(self.f, "post_concatenate",
+                dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "pre_inline_calls",
+                dict_of_named_arrays)
+
+        with ProcessLogger(logger, "inline_calls"):
+            dict_of_named_arrays = pt.tag_all_calls_to_be_inlined(
+                dict_of_named_arrays)
+            dict_of_named_arrays = pt.inline_calls(dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "post_inline_calls",
+                dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "pre_deduplicate_data_wrappers_2",
+                dict_of_named_arrays)
+
+        # FIXME: Check if this is still necessary
+        with ProcessLogger(logger, "deduplicate_data_wrappers_2[pre-partition]"):
+            dict_of_named_arrays = pt.transform.deduplicate_data_wrappers(
+                dict_of_named_arrays)
+
+        self.actx._compile_trace_callback(self.f, "post_deduplicate_data_wrappers_2",
                 dict_of_named_arrays)
 
         self.actx._compile_trace_callback(self.f, "pre_materialize",
