@@ -36,7 +36,8 @@ from grudge.models.euler import (
 )
 import grudge.op as op
 from grudge.array_context import PyOpenCLArrayContext, PytatoPyOpenCLArrayContext
-from grudge.shortcuts import rk4_step
+from grudge.models.euler import EulerOperator, vortex_initial_condition
+from grudge.shortcuts import compiled_lsrk45_step
 
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,8 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
 
     vis = make_visualizer(dcoll)
 
+    fields = actx.freeze_thaw(fields)
+
     # {{{ time stepping
 
     step = 0
@@ -160,8 +163,7 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
                 )
             assert norm_q < 200
 
-        fields = actx.thaw(actx.freeze(fields))
-        fields = rk4_step(fields, t, dt, compiled_rhs)
+        fields = compiled_lsrk45_step(actx, fields, t, dt, compiled_rhs)
         t += dt
         step += 1
 
