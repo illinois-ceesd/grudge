@@ -304,6 +304,7 @@ class _DistributedLazilyPyOpenCLCompilingFunctionCaller(
 #            else:
 #                raise
 
+        self.actx.mpi_communicator.barrier()
         with ProcessLogger(logger, "pt.find_distributed_partition"):
             distributed_partition = pt.find_distributed_partition(
                 # pylint-ignore-reason:
