@@ -73,6 +73,7 @@ THE SOFTWARE.
 
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from numbers import Number
 from typing import (
     Any,
@@ -98,11 +99,13 @@ from arraycontext import (
     from_numpy,
     get_container_context_recursively,
     get_container_context_recursively_opt,
+    tag_axes,
     to_numpy,
     unflatten,
     with_container_arithmetic,
 )
 from meshmode.mesh import BTAG_PARTITION, PartID
+from meshmode.transform_metadata import DiscretizationElementAxisTag
 from pytools import memoize_on_first_arg
 from pytools.persistent_dict import Hash, KeyBuilder
 
@@ -125,9 +128,10 @@ from grudge.projection import project
 
 # {{{ trace pair container class
 
-@with_container_arithmetic(
-    bcast_obj_array=False, eq_comparison=False, rel_comparison=False
-)
+@with_container_arithmetic(bcasts_across_obj_array=False,
+                           eq_comparison=False,
+                           rel_comparison=False,
+                           )
 @dataclass_array_container
 @dataclass(init=False, frozen=True)
 class TracePair:
@@ -152,6 +156,9 @@ class TracePair:
     dd: DOFDesc
     interior: ArrayContainer
     exterior: ArrayContainer
+
+    # NOTE: disable numpy doing any array math
+    __array_ufunc__ = None
 
     def __init__(self, dd: DOFDesc, *,
             interior: ArrayOrContainer,
@@ -772,41 +779,98 @@ class _RankBoundaryCommunicationLazy:
         # FIXME: Overly restrictive (just needs to be the same structure)
         assert type(local_bdry_data) == type(remote_bdry_data_template)
 
-        sends = {}
+        # sends = {}
 
-        def send_single_array(key, local_subary):
-            if isinstance(local_subary, Number):
-                return
-            else:
-                ary_tag = (remote_part_id.volume_tag, comm_tag, key)
-                sends[key] = make_distributed_send(
-                    local_subary, dest_rank=remote_rank, comm_tag=ary_tag)
+        # def send_single_array(key, local_subary):
+        #     if isinstance(local_subary, Number):
+        #         return
+        #     else:
+        #         ary_tag = (remote_part_id.volume_tag, comm_tag, key)
+        #         sends[key] = make_distributed_send(
+        #             local_subary, dest_rank=remote_rank, comm_tag=ary_tag)
 
-        def recv_single_array(key, remote_subary_template):
-            if isinstance(remote_subary_template, Number):
-                # NOTE: Assumes that the same number is passed on every rank
-                return remote_subary_template
-            else:
-                ary_tag = (local_part_id.volume_tag, comm_tag, key)
-                return DistributedSendRefHolder(
-                    sends[key],
-                    make_distributed_recv(
-                        src_rank=remote_rank, comm_tag=ary_tag,
-                        shape=remote_subary_template.shape,
-                        dtype=remote_subary_template.dtype,
-                        axes=remote_subary_template.axes))
+        # def recv_single_array(key, remote_subary_template):
+        #     if isinstance(remote_subary_template, Number):
+        #         # NOTE: Assumes that the same number is passed on every rank
+        #         return remote_subary_template
+        #     else:
+        #         ary_tag = (local_part_id.volume_tag, comm_tag, key)
+        #         return DistributedSendRefHolder(
+        #             sends[key],
+        #             make_distributed_recv(
+        #                 src_rank=remote_rank, comm_tag=ary_tag,
+        #                 shape=remote_subary_template.shape,
+        #                 dtype=remote_subary_template.dtype,
+        #                 axes=remote_subary_template.axes))
 
-        from arraycontext.container.traversal import rec_keyed_map_array_container
+        # from arraycontext.container.traversal import rec_keyed_map_array_container
 
-        rec_keyed_map_array_container(send_single_array, local_bdry_data)
+        # rec_keyed_map_array_container(send_single_array, local_bdry_data)
+        # self.local_bdry_data = local_bdry_data
+
+        # self.unswapped_remote_bdry_data = rec_keyed_map_array_container(
+        #     recv_single_array, remote_bdry_data_template)
+
+
+        from arraycontext import rec_map_array_container
+
+        def flatten(flat_data, ary):
+            flat_data.append(ary)
+            return ary
+
+        local_bdry_data_flat = []
+        rec_map_array_container(
+            partial(flatten, local_bdry_data_flat),
+            local_bdry_data)
+
+        remote_bdry_data_template_flat = []
+        rec_map_array_container(
+            partial(flatten, remote_bdry_data_template_flat),
+            remote_bdry_data_template)
+
+        # FIXME: Need handling for "Number" in containers?
+        local_bdry_data_concat = actx.tag_axis(
+            0, DiscretizationElementAxisTag(),
+            actx.np.concatenate(local_bdry_data_flat, axis=0))
+
+        remote_bdry_data_template_concat = actx.tag_axis(
+            0, DiscretizationElementAxisTag(),
+            actx.np.concatenate(remote_bdry_data_template_flat, axis=0))
+
+        send = make_distributed_send(
+            local_bdry_data_concat, dest_rank=remote_rank,
+            comm_tag=(remote_part_id.volume_tag, comm_tag))
+
+        self.unswapped_remote_bdry_data_concat = DistributedSendRefHolder(
+            send,
+            make_distributed_recv(
+                src_rank=remote_rank,
+                comm_tag=(local_part_id.volume_tag, comm_tag),
+                shape=remote_bdry_data_template_concat.shape,
+                dtype=remote_bdry_data_template_concat.dtype,
+                axes=remote_bdry_data_template_concat.axes))
+
         self.local_bdry_data = local_bdry_data
-
-        self.unswapped_remote_bdry_data = rec_keyed_map_array_container(
-            recv_single_array, remote_bdry_data_template)
+        self.remote_bdry_data_template = remote_bdry_data_template
 
     def finish(self):
         remote_to_local = self.dcoll._inter_part_connections[
             self.remote_part_id, self.local_part_id]
+
+        offset = 0
+
+        def unpack(ary):
+            nonlocal offset
+            result = self.array_context.tag_axis(
+                0, DiscretizationElementAxisTag(),
+                self.unswapped_remote_bdry_data_concat[
+                    offset:offset+ary.shape[0], :])
+            offset += ary.shape[0]
+            return result
+
+        from arraycontext import rec_map_array_container
+        unswapped_remote_bdry_data = rec_map_array_container(
+            unpack, self.remote_bdry_data_template)
 
         def get_opposite_trace(ary):
             if isinstance(ary, Number):
@@ -814,11 +878,10 @@ class _RankBoundaryCommunicationLazy:
             else:
                 return remote_to_local(ary)
 
-        from arraycontext import rec_map_array_container
         from meshmode.dof_array import DOFArray
         remote_bdry_data = rec_map_array_container(
             get_opposite_trace,
-            self.unswapped_remote_bdry_data,
+            unswapped_remote_bdry_data,
             leaf_class=DOFArray)
 
         return TracePair(
