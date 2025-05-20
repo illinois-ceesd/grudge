@@ -624,17 +624,18 @@ class _RankBoundaryCommunicationEager:
         self.remote_bdry_data_template = remote_bdry_data_template
 
         def _generate_num_comm_tag(sym_comm_tag):
-            result = self.base_comm_tag
-            num_comm_tag = _sym_tag_to_num_tag(sym_comm_tag)
-            if num_comm_tag is not None:
-                result += num_comm_tag
-            return result
+            # result = self.base_comm_tag
+            # num_comm_tag = _sym_tag_to_num_tag(sym_comm_tag, result)
+            # if num_comm_tag is not None:
+            #     result += num_comm_tag
+            # return result
+            return _sym_tag_to_num_tag(sym_comm_tag, self.base_comm_tag)
 
         send_sym_comm_tag = (remote_part_id.volume_tag, comm_tag)
         recv_sym_comm_tag = (local_part_id.volume_tag, comm_tag)
         self.send_comm_tag = _generate_num_comm_tag(send_sym_comm_tag)
         self.recv_comm_tag = _generate_num_comm_tag(recv_sym_comm_tag)
-        del comm_tag
+        # del comm_tag
         self.comm_tag = _sym_tag_to_num_tag(comm_tag, self.base_comm_tag)
 
         # Here, we initialize both send and receive operations through
