@@ -104,7 +104,7 @@ from arraycontext import (
 )
 from meshmode.mesh import BTAG_PARTITION, PartID
 from pytools import memoize_on_first_arg
-from pytools.persistent_dict import KeyBuilder
+from pytools.persistent_dict import Hash, KeyBuilder
 
 import grudge.dof_desc as dof_desc
 from grudge.array_context import MPIBasedArrayContext
@@ -635,7 +635,7 @@ class _RankBoundaryCommunicationEager:
         self.send_comm_tag = _generate_num_comm_tag(send_sym_comm_tag)
         self.recv_comm_tag = _generate_num_comm_tag(recv_sym_comm_tag)
         del comm_tag
-        # self.comm_tag = _sym_tag_to_num_tag(comm_tag, self.base_comm_tag)
+        self.comm_tag = _sym_tag_to_num_tag(comm_tag, self.base_comm_tag)
 
         # Here, we initialize both send and receive operations through
         # mpi4py `Request` (MPI_Request) instances for comm.Isend (MPI_Isend)
