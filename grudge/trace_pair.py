@@ -104,7 +104,7 @@ from arraycontext import (
 )
 from meshmode.mesh import BTAG_PARTITION, PartID
 from pytools import memoize_on_first_arg
-from pytools.persistent_dict import Hash, KeyBuilder
+from pytools.persistent_dict import KeyBuilder
 
 import grudge.dof_desc as dof_desc
 from grudge.array_context import MPIBasedArrayContext
@@ -544,34 +544,36 @@ def connected_parts(
     return result
 
 
-def _sym_tag_to_num_tag(comm_tag: Hashable | None) -> int | None:
+def _sym_tag_to_num_tag(comm_tag: Hashable | None, base_tag: int) -> int:
     if comm_tag is None:
-        return comm_tag
+        return base_tag
 
     if isinstance(comm_tag, int):
-        return comm_tag
+        return comm_tag + base_tag
 
     # FIXME: This isn't guaranteed to be correct.
     # See here for discussion:
     # - https://github.com/illinois-ceesd/mirgecom/issues/617#issuecomment-1057082716  # noqa
     # - https://github.com/inducer/grudge/pull/222
+    # Since only 1 communication can be pending for a given tag at a time,
+    # this does not matter currently. See https://github.com/inducer/grudge/issues/223
 
     from mpi4py import MPI
     tag_ub = MPI.COMM_WORLD.Get_attr(MPI.TAG_UB)
     assert tag_ub is not None
-    key_builder = _TagKeyBuilder()
+    key_builder = KeyBuilder()
     digest = key_builder(comm_tag)
 
     num_tag = sum(ord(ch) << i for i, ch in enumerate(digest)) % tag_ub
 
     # FIXME: This prints the wrong numerical tag because of base_comm_tag below
     warn("Encountered unknown symbolic tag "
-            f"'{comm_tag}', assigning a value of '{num_tag}'. "
+            f"'{comm_tag}', assigning a value of '{num_tag+base_tag}'. "
             "This is a temporary workaround, please ensure that "
             "tags are sufficiently distinct for your use case.",
             stacklevel=1)
 
-    return num_tag
+    return num_tag + base_tag
 
 # }}}
 
@@ -633,6 +635,7 @@ class _RankBoundaryCommunicationEager:
         self.send_comm_tag = _generate_num_comm_tag(send_sym_comm_tag)
         self.recv_comm_tag = _generate_num_comm_tag(recv_sym_comm_tag)
         del comm_tag
+        # self.comm_tag = _sym_tag_to_num_tag(comm_tag, self.base_comm_tag)
 
         # Here, we initialize both send and receive operations through
         # mpi4py `Request` (MPI_Request) instances for comm.Isend (MPI_Isend)
