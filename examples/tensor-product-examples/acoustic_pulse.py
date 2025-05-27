@@ -23,46 +23,97 @@ THE SOFTWARE.
 """
 
 
-import logging
+from meshmode.mesh import TensorProductElementGroup
+import numpy as np
 
 import pyopencl as cl
 import pyopencl.tools as cl_tools
 
-from grudge.array_context import PytatoPyOpenCLArrayContext, PyOpenCLArrayContext
-from grudge.models.euler import (
-    vortex_initial_condition,
-    EulerOperator,
-    EntropyStableEulerOperator
+from grudge.array_context import (
+    PyOpenCLArrayContext,
+    PytatoPyOpenCLArrayContext
 )
+from grudge.models.euler import (
+    ConservedEulerField,
+    EulerOperator,
+    InviscidWallBC
+)
+from grudge.shortcuts import rk4_step
+
+from meshmode.mesh import BTAG_ALL
+
+from pytools.obj_array import make_obj_array
+
 import grudge.op as op
-from grudge.array_context import PyOpenCLArrayContext, PytatoPyOpenCLArrayContext
-from grudge.models.euler import EulerOperator, vortex_initial_condition
-from grudge.shortcuts import compiled_lsrk45_step
 
-
+import logging
 logger = logging.getLogger(__name__)
 
 
-def run_vortex(actx, order=3, resolution=8, final_time=5,
-               esdg=False,
-               overintegration=False,
-               flux_type="central",
-               visualize=False):
+def gaussian_profile(
+        x_vec, t=0, rho0=1.0, rhoamp=1.0, p0=1.0, gamma=1.4,
+        center=None, velocity=None):
 
-    logger.info(
-        """
-        Isentropic vortex parameters:\n
-        order: %s\n
-        final_time: %s\n
-        resolution: %s\n
-        entropy stable: %s\n
-        overintegration: %s\n
-        flux_type: %s\n
-        visualize: %s
-        """,
-        order, final_time, resolution, esdg,
-        overintegration, flux_type, visualize
+    dim = len(x_vec)
+    if center is None:
+        center = np.zeros(shape=(dim,))
+    if velocity is None:
+        velocity = np.zeros(shape=(dim,))
+
+    lump_loc = center + t * velocity
+
+    # coordinates relative to lump center
+    rel_center = make_obj_array(
+        [x_vec[i] - lump_loc[i] for i in range(dim)]
     )
+    actx = x_vec[0].array_context
+    r = actx.np.sqrt(np.dot(rel_center, rel_center))
+    expterm = rhoamp * actx.np.exp(1 - r ** 2)
+
+    mass = expterm + rho0
+    mom = velocity * mass
+    energy = (p0 / (gamma - 1.0)) + np.dot(mom, mom) / (2.0 * mass)
+
+    return ConservedEulerField(mass=mass, energy=energy, momentum=mom)
+
+
+def make_pulse(amplitude, r0, w, r):
+    dim = len(r)
+    r_0 = np.zeros(dim)
+    r_0 = r_0 + r0
+    rel_center = make_obj_array(
+        [r[i] - r_0[i] for i in range(dim)]
+    )
+    actx = r[0].array_context
+    rms2 = w * w
+    r2 = np.dot(rel_center, rel_center) / rms2
+    return amplitude * actx.np.exp(-.5 * r2)
+
+
+def acoustic_pulse_condition(x_vec, t=0):
+    dim = len(x_vec)
+    vel = np.zeros(shape=(dim,))
+    orig = np.zeros(shape=(dim,))
+    uniform_gaussian = gaussian_profile(
+        x_vec, t=t, center=orig, velocity=vel, rhoamp=0.0)
+
+    amplitude = 1.0
+    width = 0.1
+    pulse = make_pulse(amplitude, orig, width, x_vec)
+
+    return ConservedEulerField(
+        mass=uniform_gaussian.mass,
+        energy=uniform_gaussian.energy + pulse,
+        momentum=uniform_gaussian.momentum
+    )
+
+
+def run_acoustic_pulse(actx,
+                       order=3,
+                       final_time=1,
+                       resolution=4,
+                       overintegration=False,
+                       visualize=False):
 
     # eos-related parameters
     gamma = 1.4
@@ -71,41 +122,31 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
 
     from meshmode.mesh.generation import generate_regular_rect_mesh
 
+    dim = 3
+    box_ll = -0.5
+    box_ur = 0.5
     mesh = generate_regular_rect_mesh(
-        a=(0, -5),
-        b=(20, 5),
-        nelements_per_axis=(2*resolution, resolution),
-        periodic=(True, True))
+        a=(box_ll,)*dim,
+        b=(box_ur,)*dim,
+        nelements_per_axis=(resolution,)*dim,
+        group_cls=TensorProductElementGroup)
 
-    from meshmode.discretization.poly_element import (
-        QuadratureSimplexGroupFactory,
-        default_simplex_group_factory,
-    )
-
-    from grudge.discretization import make_discretization_collection
+    from grudge import DiscretizationCollection
     from grudge.dof_desc import DISCR_TAG_BASE, DISCR_TAG_QUAD
+    from meshmode.discretization.poly_element import \
+        LegendreGaussLobattoTensorProductGroupFactory as LGL
 
-    if esdg:
-        case = "esdg-vortex"
-        operator_cls = EntropyStableEulerOperator
-    else:
-        case = "vortex"
-        operator_cls = EulerOperator
-
-    exp_name = f"fld-{case}-N{order}-K{resolution}-{flux_type}"
-
+    exp_name = f"fld-acoustic-pulse-N{order}-K{resolution}"
     if overintegration:
         exp_name += "-overintegrated"
         quad_tag = DISCR_TAG_QUAD
     else:
         quad_tag = None
 
-    dcoll = make_discretization_collection(
+    dcoll = DiscretizationCollection(
         actx, mesh,
         discr_tag_to_group_factory={
-            DISCR_TAG_BASE: default_simplex_group_factory(
-                base_dim=mesh.dim, order=order),
-            DISCR_TAG_QUAD: QuadratureSimplexGroupFactory(2*order)
+            DISCR_TAG_BASE: LGL(order)
         }
     )
 
@@ -113,25 +154,26 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
 
     # {{{ Euler operator
 
-    euler_operator = operator_cls(
+    euler_operator = EulerOperator(
         dcoll,
-        flux_type=flux_type,
+        bdry_conditions={BTAG_ALL: InviscidWallBC()},
+        flux_type="lf",
         gamma=gamma,
         quadrature_tag=quad_tag
     )
 
     def rhs(t, q):
-        return euler_operator.operator(actx, t, q)
+        return euler_operator.operator(t, q)
 
     compiled_rhs = actx.compile(rhs)
 
-    fields = vortex_initial_condition(actx.thaw(dcoll.nodes()))
-
     from grudge.dt_utils import h_min_from_volume
 
-    cfl = 0.01
+    cfl = 0.125
     cn = 0.5*(order + 1)**2
     dt = cfl * actx.to_numpy(h_min_from_volume(dcoll)) / cn
+
+    fields = acoustic_pulse_condition(actx.thaw(dcoll.nodes()))
 
     logger.info("Timestep size: %g", dt)
 
@@ -141,8 +183,6 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
 
     vis = make_visualizer(dcoll)
 
-    fields = actx.freeze_thaw(fields)
-
     # {{{ time stepping
 
     step = 0
@@ -151,7 +191,6 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
         if step % 10 == 0:
             norm_q = actx.to_numpy(op.norm(dcoll, fields, 2))
             logger.info("[%04d] t = %.5f |q| = %.5e", step, t, norm_q)
-
             if visualize:
                 vis.write_vtk_file(
                     f"{exp_name}-{step:04d}.vtu",
@@ -161,49 +200,39 @@ def run_vortex(actx, order=3, resolution=8, final_time=5,
                         ("momentum", fields.momentum)
                     ]
                 )
-            assert norm_q < 200
+            assert norm_q < 5
 
-        fields = compiled_lsrk45_step(actx, fields, t, dt, compiled_rhs)
+        fields = actx.thaw(actx.freeze(fields))
+        fields = rk4_step(fields, t, dt, compiled_rhs)
         t += dt
         step += 1
 
     # }}}
 
 
-def main(ctx_factory, order=3, final_time=5, resolution=8,
-         esdg=False,
-         overintegration=False,
-         lf_stabilization=False,
-         visualize=False,
-         lazy=False):
+def main(ctx_factory, order=3, final_time=1, resolution=16,
+         overintegration=False, visualize=False, lazy=False):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
-    allocator = cl_tools.MemoryPool(cl_tools.ImmediateAllocator(queue))
     if lazy:
-        actx = PytatoPyOpenCLArrayContext(queue, allocator=allocator)
+        actx = PytatoPyOpenCLArrayContext(
+            queue,
+            allocator=cl_tools.MemoryPool(cl_tools.ImmediateAllocator(queue)),
+        )
     else:
-        actx = PyOpenCLArrayContext(queue, allocator=allocator)
-
-    if not actx.supports_nonscalar_broadcasting and esdg is True:
-        raise RuntimeError(
-            "Cannot use ESDG with an array context that cannot perform "
-            "nonscalar broadcasting. Run with --lazy instead."
+        actx = PyOpenCLArrayContext(
+            queue,
+            allocator=cl_tools.MemoryPool(cl_tools.ImmediateAllocator(queue)),
+            force_device_scalars=True,
         )
 
-    if lf_stabilization:
-        flux_type = "lf"
-    else:
-        flux_type = "central"
-
-    run_vortex(
+    run_acoustic_pulse(
         actx,
         order=order,
         resolution=resolution,
-        final_time=final_time,
-        esdg=esdg,
         overintegration=overintegration,
-        flux_type=flux_type,
+        final_time=final_time,
         visualize=visualize
     )
 
@@ -213,14 +242,10 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--order", default=3, type=int)
-    parser.add_argument("--tfinal", default=0.015, type=float)
-    parser.add_argument("--resolution", default=8, type=int)
-    parser.add_argument("--esdg", action="store_true",
-                        help="use entropy stable dg")
+    parser.add_argument("--tfinal", default=0.1, type=float)
+    parser.add_argument("--resolution", default=16, type=int)
     parser.add_argument("--oi", action="store_true",
                         help="use overintegration")
-    parser.add_argument("--lf", action="store_true",
-                        help="turn on lax-friedrichs dissipation")
     parser.add_argument("--visualize", action="store_true",
                         help="write out vtk output")
     parser.add_argument("--lazy", action="store_true",
@@ -232,8 +257,6 @@ if __name__ == "__main__":
          order=args.order,
          final_time=args.tfinal,
          resolution=args.resolution,
-         esdg=args.esdg,
          overintegration=args.oi,
-         lf_stabilization=args.lf,
          visualize=args.visualize,
          lazy=args.lazy)
