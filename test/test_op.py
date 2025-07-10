@@ -19,14 +19,17 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
-
-
 import logging
 
 import numpy as np
 import pytest
 
+from meshmode.mesh import (
+    SimplexElementGroup,
+    TensorProductElementGroup
+)
 import meshmode.mesh.generation as mgen
+from meshmode.mesh.processing import affine_map
 from arraycontext import pytest_generate_tests_for_array_contexts
 from meshmode.discretization.poly_element import (
     InterpolatoryEdgeClusteredGroupFactory,
@@ -35,7 +38,11 @@ from meshmode.discretization.poly_element import (
 from meshmode.mesh import BTAG_ALL
 from pytools.obj_array import make_obj_array
 
-from grudge import geometry, op
+from grudge import (
+    geometry as geo,
+    op,
+    DiscretizationCollection,
+)
 from grudge.array_context import PytestPyOpenCLArrayContextFactory
 from grudge.discretization import make_discretization_collection
 from grudge.dof_desc import (
@@ -57,6 +64,10 @@ pytest_generate_tests = pytest_generate_tests_for_array_contexts(
 
 # {{{ gradient
 
+@pytest.mark.parametrize("group_cls", [
+    SimplexElementGroup,
+    TensorProductElementGroup
+])
 @pytest.mark.parametrize("form", ["strong", "weak", "weak-overint"])
 @pytest.mark.parametrize("dim", [1, 2, 3])
 @pytest.mark.parametrize("order", [2, 3])
@@ -66,30 +77,68 @@ pytest_generate_tests = pytest_generate_tests_for_array_contexts(
     (True, False),
     (True, True)
     ])
-def test_gradient(actx_factory, form, dim, order, vectorize, nested,
-                  warp_mesh, visualize=False):
+def test_gradient(actx_factory, form, dim, order, warp_mesh, vectorize, nested,
+                  group_cls, visualize=False):
     actx = actx_factory()
 
     from pytools.convergence import EOCRecorder
     eoc_rec = EOCRecorder()
 
-    for n in [8, 12, 16] if warp_mesh else [4, 6, 8]:
+    if group_cls == TensorProductElementGroup:
+        if dim == 1:
+            pytest.skip("Skipping 1D for tensor-product elements.")
         if warp_mesh:
+            pytest.skip("Skipping warped mesh for tensor-product elements.")
+
+    mesh_n = [8, 12, 16] if warp_mesh else [4, 6, 8]
+            
+    for n in mesh_n:
+
+        if warp_mesh:
+            if group_cls == TensorProductElementGroup:
+                pytest.skip("Skipping warped mesh for TPE.")
             if dim == 1:
                 pytest.skip("warped mesh in 1D not implemented")
             mesh = mgen.generate_warped_rect_mesh(
                           dim=dim, order=order, nelements_side=n)
         else:
             mesh = mgen.generate_regular_rect_mesh(
-                    a=(-1,)*dim, b=(1,)*dim,
-                    nelements_per_axis=(n,)*dim)
+                a=(-1,)*dim, b=(1,)*dim,
+                nelements_per_axis=(n,)*dim,
+                group_cls=group_cls)
 
+        # if group_cls is TensorProductElementGroup:
+
+        #    import grudge.dof_desc as dd
+        #    from meshmode.discretization.poly_element import \
+        #            LegendreGaussLobattoTensorProductGroupFactory as LGL
+
+        #    dcoll = DiscretizationCollection(
+        #        actx,
+        #        mesh,
+        #        discr_tag_to_group_factory={
+        #            dd.DISCR_TAG_BASE: LGL(order)})
+
+        # elif group_cls is SimplexElementGroup:
         dcoll = make_discretization_collection(
-                   actx, mesh,
-                   discr_tag_to_group_factory={
-                       DISCR_TAG_BASE: InterpolatoryEdgeClusteredGroupFactory(order),
-                       DISCR_TAG_QUAD: QuadratureGroupFactory(3 * order)
-                   })
+            actx, mesh,
+            discr_tag_to_group_factory={
+                DISCR_TAG_BASE: InterpolatoryEdgeClusteredGroupFactory(order),
+                DISCR_TAG_QUAD: QuadratureGroupFactory(3 * order)
+            })
+
+        # else:
+        #    raise AssertionError('Expecting TensorProductElementGroup or '
+        #                         f'SimplexElementGroup. Found {group_cls}')
+
+        alpha = 0.3
+        rot_mat = np.array([
+                [np.cos(alpha), np.sin(alpha), 0],
+                [-np.sin(alpha), np.cos(alpha), 0],
+                [0, 0, 1],
+        ])[:dim, :dim]
+
+        mesh = affine_map(mesh, A=rot_mat)
 
         def f(x):
             result = 1
@@ -123,7 +172,7 @@ def test_gradient(actx_factory, form, dim, order, vectorize, nested,
             dd_allfaces = dd.with_domain_tag(
                 BoundaryDomainTag(FACE_RESTR_ALL, VTAG_ALL)
                 )
-            normal = geometry.normal(actx, dcoll, dd)
+            normal = geo.normal(actx, dcoll, dd)
             u_avg = u_tpair.avg
             if vectorize:
                 if nested:
@@ -216,6 +265,10 @@ def test_gradient(actx_factory, form, dim, order, vectorize, nested,
 
 # {{{ divergence
 
+@pytest.mark.parametrize("group_cls", [
+    SimplexElementGroup,
+    TensorProductElementGroup
+])
 @pytest.mark.parametrize("form", ["strong", "weak"])
 @pytest.mark.parametrize("dim", [1, 2, 3])
 @pytest.mark.parametrize("order", [2, 3])
@@ -225,7 +278,7 @@ def test_gradient(actx_factory, form, dim, order, vectorize, nested,
     (True, True)
     ])
 def test_divergence(actx_factory, form, dim, order, vectorize, nested,
-        visualize=False):
+                    group_cls, visualize=False):
     actx = actx_factory()
 
     from pytools.convergence import EOCRecorder
@@ -233,10 +286,40 @@ def test_divergence(actx_factory, form, dim, order, vectorize, nested,
 
     for n in [4, 6, 8]:
         mesh = mgen.generate_regular_rect_mesh(
-                a=(-1,)*dim, b=(1,)*dim,
-                nelements_per_axis=(n,)*dim)
+            a=(-1,)*dim, b=(1,)*dim,
+            nelements_per_axis=(n,)*dim,
+            group_cls=group_cls)
 
-        dcoll = make_discretization_collection(actx, mesh, order=order)
+        if group_cls is TensorProductElementGroup:
+            # no reason to test 1D tensor product elements
+            if dim == 1:
+                return
+
+            import grudge.dof_desc as dd
+            from meshmode.discretization.poly_element import \
+                    LegendreGaussLobattoTensorProductGroupFactory as LGL
+
+            dcoll = make_discretization_collection(
+                actx,
+                mesh,
+                discr_tag_to_group_factory={
+                    dd.DISCR_TAG_BASE: LGL(order)})
+
+        elif group_cls is SimplexElementGroup:
+            dcoll = DiscretizationCollection(actx, mesh, order=order)
+
+        else:
+            raise AssertionError('Expecting TensorProductElementGroup or '
+                                 f'SimplexElementGroup. Found {group_cls}')
+
+        alpha = 0.3
+        rot_mat = np.array([
+                [np.cos(alpha), np.sin(alpha), 0],
+                [-np.sin(alpha), np.cos(alpha), 0],
+                [0, 0, 1],
+        ])[:dim, :dim]
+
+        mesh = affine_map(mesh, A=rot_mat)
 
         def f(x, dcoll=dcoll):
             result = make_obj_array([dcoll.zeros(actx) + (i+1) for i in range(dim)])
@@ -277,7 +360,7 @@ def test_divergence(actx_factory, form, dim, order, vectorize, nested,
             dd_allfaces = dd.with_domain_tag(
                 BoundaryDomainTag(FACE_RESTR_ALL, VTAG_ALL)
                 )
-            normal = geometry.normal(actx, dcoll, dd)
+            normal = geo.normal(actx, dcoll, dd)
             flux = u_tpair.avg @ normal
             return op.project(dcoll, dd, dd_allfaces, flux)
 

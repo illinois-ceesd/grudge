@@ -67,6 +67,8 @@ from meshmode.dof_array import DOFArray
 from meshmode.transform_metadata import (
     DiscretizationAmbientDimAxisTag,
     DiscretizationTopologicalDimAxisTag,
+    DiscretizationDOFAxisTag,
+    DiscretizationElementAxisTag,
 )
 from pymbolic.geometric_algebra import MultiVector
 from pytools import memoize_in
@@ -78,6 +80,11 @@ from grudge.dof_desc import DD_VOLUME_ALL, DISCR_TAG_BASE, DOFDesc
 
 
 register_multivector_as_array_container()
+
+
+def _has_geoderiv_connection(grp):
+    from modepy.shapes import Simplex
+    return grp.is_affine and issubclass(grp._modepy_shape_cls, Simplex)
 
 
 def _geometry_to_quad_if_requested(
@@ -99,7 +106,7 @@ def _geometry_to_quad_if_requested(
     return DOFArray(
             vec.array_context,
             tuple(
-                geoderiv_vec_i if megrp.is_affine else all_quad_vec_i
+                geoderiv_vec_i if _has_geoderiv_connection(megrp) else all_quad_vec_i
                 for megrp, geoderiv_vec_i, all_quad_vec_i in zip(
                     dcoll.discr_from_dd(inner_dd).mesh.groups,
                     dcoll._base_to_geoderiv_connection(inner_dd)(vec),
@@ -659,11 +666,11 @@ def area_element(
 
     @memoize_in(dcoll, (area_element, dd, _use_geoderiv_connection))
     def _area_elements():
-        result = actx.np.sqrt(
-            pseudoscalar(
-                actx, dcoll, dd=dd,
-                _use_geoderiv_connection=_use_geoderiv_connection).norm_squared())
-
+        res = pseudoscalar(
+            actx, dcoll, dd=dd, _use_geoderiv_connection=_use_geoderiv_connection
+        ).norm_squared()
+        result = actx.np.sqrt(tag_axes(actx, {0: DiscretizationElementAxisTag(),
+                                              1: DiscretizationDOFAxisTag()}, res))
         return actx.freeze(
                 actx.tag(NameHint(f"area_el_{dd.as_identifier()}"), result))
 
